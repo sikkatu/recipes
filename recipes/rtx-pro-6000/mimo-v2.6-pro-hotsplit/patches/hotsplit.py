@@ -174,6 +174,28 @@ def _row_bytes(tens, rows: int) -> int:
     return int(rows * per_row)
 
 
+def _vram_precheck(hot_bytes: int, free_now: int, reserve_gib: float, floor_gib: float = 2.0):
+    """Decide whether the hot-bank copy of ONE layer fits in free VRAM.
+
+    The hot copy is made BEFORE the originals are freed, so the transient peak is
+    (hot weights + hot scales) on top of whatever is already resident. `reserve_gib` must also
+    cover what comes AFTER the split phase: CUDA-graph capture buffers, the MoE kernel workspace
+    (Marlin), and the KV cache vLLM allocates after model load. This function only guards the
+    split-phase transient; it is not a promise that the KV cache will fit later -- size
+    HOTSPLIT_VRAM_RESERVE_GIB accordingly (see tp4.env.example).
+
+    Returns (ok, reserve_bytes). A refusal must happen BEFORE any weight of this layer changes.
+    """
+    import math
+    if hot_bytes < 0:
+        raise ValueError(f"_vram_precheck: hot_bytes must be >= 0, got {hot_bytes}")
+    if not math.isfinite(reserve_gib) or reserve_gib < 0:
+        raise ValueError(f"_vram_precheck: reserve_gib must be finite and >= 0, got {reserve_gib}")
+    reserve = max(int(reserve_gib * 2**30), int(floor_gib * 2**30))
+    ok = (free_now - hot_bytes) >= reserve
+    return ok, reserve
+
+
 def _weights_release_check(tag: str, li: int, free_before: int, expected_release: int) -> None:
     """Honest accounting of the original weight storage, measured across the WHOLE layer split.
 
@@ -694,18 +716,21 @@ def apply_hotsplit(model: torch.nn.Module) -> None:
                       + _row_bytes(getattr(layers[li], "w13_weight_scale", None), _nhot)
                       + _row_bytes(getattr(layers[li], "w2_weight_scale", None), _nhot))
         _free_now, _ = torch.cuda.mem_get_info()
-        _margin_now = max(margin, 2 * 2**30)   # never plan below a 2 GiB transient reserve
-        if _free_now - _hot_bytes < _margin_now:
+        _reserve_gib = float(os.environ.get("HOTSPLIT_VRAM_RESERVE_GIB", "2"))
+        _pre_ok, _reserve = _vram_precheck(_hot_bytes, _free_now, _reserve_gib)
+        if not _pre_ok:
             # Refuse the WHOLE split, not just this layer. A silent `break` would leave a
             # half-hotsplit model: already-split layers banked, the rest stock -- correct but
             # surprising, and impossible to reason about from the outside. Abort loudly.
+            # This runs BEFORE any weight of this layer is touched; if it fires on the FIRST
+            # layer, no weight in the model has been modified yet.
             raise RuntimeError(
                 f"hotsplit {tag}: VRAM pre-check FAILED for layer {li} of {len(layers)}: hot copy "
                 f"needs {_hot_bytes / 2**30:.2f} GiB (weights+scales, {_nhot} rows) but only "
-                f"{_free_now / 2**30:.2f} GiB free with a {_margin_now / 2**30:.2f} GiB reserve. "
+                f"{_free_now / 2**30:.2f} GiB free with a {_reserve / 2**30:.2f} GiB reserve. "
                 f"{done} layer(s) already split, {len(uva_q) + len(hbm_q)} left stock. "
-                "Lower HOTSPLIT_HOT_GIB or free VRAM and relaunch; nothing outside the container "
-                "was modified.")
+                "Lower HOTSPLIT_HOT_GIB, raise HOTSPLIT_VRAM_RESERVE_GIB headroom accounting, or free "
+                "VRAM and relaunch; nothing outside the container was modified.")
         _peak0 = _mem_peak_start()
         if dynamic:  # offloaded layers are reused in place; resident layers get a full host copy
             host_need = 0.0 if _is_uva(layers[li].w13_weight) else E * cell_bytes[li] / 2**30

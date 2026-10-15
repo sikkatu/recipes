@@ -48,3 +48,29 @@ With `HOTSPLIT_DYNAMIC=1` the run refuses to start if the step hook cannot be in
 `HOTSPLIT_ALLOW_STATIC_FALLBACK=1`). Every rank logs `dynamic_hook=ACTIVE` or `dynamic_hook=INACTIVE`.
 To prove the dynamic counter updates during generation (not just import), generate while watching
 `hotsplit dynamic update` lines in `docker logs -f`.
+
+## Proving the dynamic mode works (not just imports)
+
+`check-hotsplit-tp4.sh` reads logs; that is not proof the counter moves. To prove it:
+
+1. Start with `HOTSPLIT_DYNAMIC=1 HOTSPLIT_STRICT_HOOK=1` and confirm every rank logs
+   `dynamic_hook=ACTIVE` (a FAILED status with strict mode aborts the run).
+2. Generate real text (a few dozen requests), then re-run `scripts/check-hotsplit-tp4.sh`:
+   the `hotsplit dynamic update` count must grow and `live/counts.rank*.json` timestamps
+   must advance.
+3. Compare outputs before/after the swaps: the hot set changes at each update, so a
+   mid-run divergence in greedy outputs is expected — compare with the same static run
+   as the control, not byte-for-byte against itself.
+
+## Proving NUMA locality (logging is not proof)
+
+`HOTSPLIT_NUMA_POLICY=preferred` is advisory — the kernel may still place pinned pages on
+another node under pressure. Only `bind` hard-guarantees locality (and may fail/OOM when the
+node is full). To measure the real placement:
+
+1. Run `scripts/numastat-report.sh <container>` while the server is up; for each worker PID
+   it prints per-node page counts from `/proc/<pid>/numa_maps` and `numastat -p` when available.
+2. Compare three configurations on the same workload (one at a time):
+   `HOTSPLIT_NUMA_POLICY=preferred`, `=bind`, and `HOTSPLIT_NUMA=0` (no binding).
+3. Measure host-to-device bandwidth on the same payload for each; the difference is the
+   real cost/benefit of the binding, not the log line.

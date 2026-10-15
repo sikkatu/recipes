@@ -42,6 +42,13 @@ case "$(basename "$0")" in
       container) exit 1 ;;   # "container does not exist"
       logs) echo stub-logs; exit 0 ;;
       run)
+        # service calls (probes/provenance): --rm ... python -c -> return the site path, exit 0
+        case "$*" in
+          *--rm*)
+            echo "STUB_DOCKER_RUN_RM" >> "$STUB_LOG"
+            echo "/usr/local/lib/python3.12/dist-packages"
+            exit 0 ;;
+        esac
         if [ "${ALLOW_RUN:-0}" = "1" ]; then
           echo "STUB_DOCKER_RUN" >> "$STUB_LOG"
           exit 0
@@ -96,12 +103,17 @@ def docker_run_reached(log: Path) -> bool:
 
 
 def run_lines_of(log: Path) -> list:
-    """Extract the `docker run` invocations (the stub logs the full binary path)."""
+    """Extract the main `docker run -d` invocations (the stub logs the full binary path).
+    Service calls (`docker run --rm ... python -c`) are excluded: they are compatibility
+    probes and provenance hashers, not the server container."""
     out = []
     for l in log.read_text().splitlines():
         stripped = l.strip()
-        if "docker run " in stripped or stripped.endswith("docker run"):
-            out.append(stripped)
+        if "docker run " not in stripped and not stripped.endswith("docker run"):
+            continue
+        if "--rm" in stripped:
+            continue
+        out.append(stripped)
     return out
 
 
@@ -165,7 +177,7 @@ def test_valid_config_reaches_docker_run_exactly_once(lp, stub_env):
     # what matters is that docker run was attempted exactly once and the key was passed on
     assert log.exists()
     lines = log.read_text().splitlines()
-    runs = [l for l in lines if "STUB_DOCKER_RUN" in l]
+    runs = [l for l in lines if "STUB_DOCKER_RUN" in l and "STUB_DOCKER_RUN_RM" not in l]
     assert len(runs) == 1, f"expected exactly one docker run attempt, got {len(runs)}: {runs}"
     run_lines = run_lines_of(log)
     assert len(run_lines) == 1

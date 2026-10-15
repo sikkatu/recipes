@@ -23,8 +23,9 @@ import sys
 from pathlib import Path
 
 import pytest
-
 RECIPE = Path(__file__).resolve().parent.parent / "recipes" / "rtx-pro-6000" / "mimo-v2.6-pro-hotsplit"
+BASE = Path(__file__).resolve().parent.parent / "recipes" / "rtx-pro-6000"
+PATCHES = RECIPE / "patches"
 SRC = RECIPE / "patches" / "hotsplit.py"
 SOURCE = SRC.read_text()
 
@@ -178,6 +179,67 @@ def test_mem_peak_includes_baseline_increment():
     seg = ast.get_source_segment(SOURCE, fn) or ""
     assert "base_alloc" in seg
     assert "peak_alloc - base_alloc" in seg
+
+
+def test_vram_precheck_refuses_insufficient_reserve():
+    """The pre-check must refuse BEFORE any weight is touched when the transient peak
+    would exceed free VRAM minus the reserve (CUDA graphs + workspace + KV headroom)."""
+    precheck = _extract("_vram_precheck")
+    # 5 GiB hot copy, 10 GiB free, 2 GiB reserve -> fits (10-5=5 >= 2)
+    ok, reserve = precheck(5 * 2**30, 10 * 2**30, 2.0)
+    assert ok and reserve == 2 * 2**30
+    # 5 GiB hot copy, 6 GiB free, 2 GiB reserve -> does NOT fit (6-5=1 < 2)
+    ok, reserve = precheck(5 * 2**30, 6 * 2**30, 2.0)
+    assert not ok
+    # floor applies even if reserve_gib is 0
+    ok, reserve = precheck(1 * 2**30, 2 * 2**30, 0.0)
+    assert not ok and reserve == 2 * 2**30
+    # validation
+    with pytest.raises(ValueError, match="hot_bytes"):
+        precheck(-1, 10, 1.0)
+    with pytest.raises(ValueError, match="reserve_gib"):
+        precheck(1, 10, -1.0)
+
+
+def test_vram_precheck_refusal_happens_before_any_split():
+    """AST check: the pre-check call site must come before any _split_layer_* call."""
+    tree = ast.parse(SOURCE)
+    fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "apply_hotsplit")
+    seg = ast.get_source_segment(SOURCE, fn) or ""
+    i_pre = seg.find("_vram_precheck")
+    i_split = min(x for x in (seg.find("_split_layer_static("), seg.find("_split_layer_dynamic(")) if x != -1)
+    assert i_pre != -1 and i_pre < i_split, "VRAM pre-check must run before any layer split"
+    # the reserve knob must be read from the environment
+    assert "HOTSPLIT_VRAM_RESERVE_GIB" in seg
+
+
+def test_sitecustomize_hook_statuses():
+    """sitecustomize.py must emit HOOK STATUS ACTIVE/INACTIVE/FAILED and support strict mode."""
+    sc = (PATCHES / "sitecustomize.py").read_text()
+    assert "HOOK STATUS" in sc
+    assert "ACTIVE" in sc and "INACTIVE" in sc and "FAILED" in sc
+    assert "HOTSPLIT_STRICT_HOOK" in sc
+    # strict mode must raise, not just warn
+    assert "SystemExit" in sc or "raise" in sc
+
+
+def test_numa_bind_strict_and_honest_caveat():
+    """numa_bind.py must expose strict mode and document that preferred is advisory."""
+    nb = (PATCHES / "numa_bind.py").read_text()
+    assert "HOTSPLIT_NUMA_STRICT" in nb
+    assert "advisory" in nb.lower()
+    assert "HOTSPLIT_NUMA_POLICY" in nb
+    # bind_for_device returns (ok, detail) for the caller to enforce strict mode
+    assert "return ok," in nb or "return True," in nb or "return False," in nb
+
+
+def test_launcher_autodetects_site_and_probes_api():
+    """run-tp4-hotsplit.sh must auto-detect SITE inside the image and probe patch compatibility."""
+    launcher = (BASE / "mimo-v2.6-pro-hotsplit" / "scripts" / "run-tp4-hotsplit.sh").read_text()
+    assert "SITE" in launcher
+    assert "find_spec" in launcher, "must probe the image's own model files before mounting patches"
+    assert "load_weights" in launcher or "process_weights_after_loading" in launcher
+    assert "SHA-256" in launcher or "sha256" in launcher.lower()
 
 
 def test_dynamic_hook_decision_refuses_silent_fallback():

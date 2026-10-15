@@ -50,7 +50,7 @@ RECIPE="$(cd "$HERE/.." && pwd)"
 MODEL_ID="${MODEL_ID:-XiaomiMiMo/MiMo-V2.6-Pro-MOPD}"
 MODEL_DIR="${MODEL_DIR:-}"
 CONTAINER="${CONTAINER:-mimo-pro-tp4-hotsplit}"
-SITE="${SITE:-/usr/local/lib/python3.12/dist-packages}"
+SITE="${SITE:-}"   # empty = auto-detect inside the image; set explicitly to override
 PATCH_MODEL_FILES="${PATCH_MODEL_FILES:-1}"   # 0 = keep the image's own mimo_v2.py; hook via sitecustomize
 PORT="${PORT:-30007}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-16384}"
@@ -112,6 +112,54 @@ MOUNTS+=(
 )
 BOOT_HOOK=1
 if [ "$PATCH_MODEL_FILES" = 1 ]; then
+  # --- patch-compatibility gate (audit: PATCH_MODEL_FILES replaces model files wholesale) ---
+  # 1. Auto-detect the site-packages path inside the image (SITE= overrides).
+  # 2. Verify the image's own mimo_v2.py / mimo_v2_omni.py still carry the API our patches
+  #    override (load_weights, process_weights_after_loading, the MoE apply path) before we
+  #    mount over them. A mismatch means the patches were written for a different vLLM build.
+  # 3. Log the originals' SHA-256 for provenance (compare with a known-good list in the log).
+  DETECT_CMD='import importlib.util,sys; s=importlib.util.find_spec("vllm"); print(s.submodule_search_locations[0])'
+  if [ -z "$SITE" ]; then
+    SITE="$(docker run --rm "$IMAGE" python -c "$DETECT_CMD" 2>/dev/null | tr -d '
+')" || die "failed to detect vLLM site-packages inside the image"
+    [ -n "$SITE" ] || die "empty vLLM site-packages path detected; set SITE= explicitly"
+  fi
+  echo "SITE (auto-detected or overridden): $SITE"
+  # compatibility probe: the image's own files must expose the API our patches override
+  PROBE_CMD='import importlib.util,sys
+ok=True
+for mod,name in [("vllm.model_executor.models.mimo_v2","mimo_v2"),("vllm.model_executor.models.mimo_v2_omni","mimo_v2_omni")]:
+    try:
+        m=importlib.util.find_spec(mod)
+        if m is None:
+            print(f"MISSING {name}"); ok=False; continue
+        print(f"FOUND {name}: {m.origin}")
+        src=open(m.origin).read()
+        for fn in ["load_weights","process_weights_after_loading"]:
+            if fn in src:
+                print(f"  API {name}.{fn}: present")
+            else:
+                print(f"  API {name}.{fn}: ABSENT")
+                ok=False
+    except Exception as e:
+        print(f"ERROR {name}: {e!r}"); ok=False
+sys.exit(0 if ok else 3)'
+  echo "Probing the image's own model files for patch compatibility..."
+  if ! docker run --rm "$IMAGE" python -c "$PROBE_CMD"; then
+    die "the image's vLLM model files do not match what patches/mimo_v2_hotsplit.py expects.
+The patches replace load_weights / process_weights_after_loading wholesale; if those methods are
+missing or renamed in this build the mount will break the model. Either use PATCH_MODEL_FILES=0
+(hook via sitecustomize) or rebase the patches onto this exact vLLM build."
+  fi
+  # provenance: log the originals' hashes before we shadow them
+  HASH_CMD='import hashlib,importlib.util
+for mod in ["vllm.model_executor.models.mimo_v2","vllm.model_executor.models.mimo_v2_omni"]:
+    s=importlib.util.find_spec(mod)
+    if s and s.origin:
+        h=hashlib.sha256(open(s.origin,"rb").read()).hexdigest()
+        print(f"{h}  {s.origin}")'
+  echo "Original module SHA-256 (for provenance; compare with your known-good list):"
+  docker run --rm "$IMAGE" python -c "$HASH_CMD" || true
   MOUNTS+=(
     -v "$RECIPE/patches/mimo_v2_hotsplit.py:$SITE/vllm/model_executor/models/mimo_v2.py:ro"
     -v "$RECIPE/patches/mimo_v2_omni.py:$SITE/vllm/model_executor/models/mimo_v2_omni.py:ro"

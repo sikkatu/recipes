@@ -77,29 +77,40 @@ def set_mempolicy(node: int, mode: int = MPOL_PREFERRED) -> bool:
     return rc == 0
 
 
-def bind_for_device(index: int) -> None:
+def bind_for_device(index: int):
+    """Returns (ok, detail). ok=True means a NUMA policy was actually applied for this device."""
     if index in _BOUND:
-        return
+        return True, "already bound"
     _BOUND.add(index)
     import torch  # already imported by the time a worker selects its device
-
     props = torch.cuda.get_device_properties(index)
     bus = getattr(props, "pci_bus_id", None)
     if bus is None:
         _log(f"cuda:{index}: torch does not expose pci_bus_id; not binding")
-        return
+        return False, "torch does not expose pci_bus_id"
     addr = pci_addr(getattr(props, "pci_domain_id", 0), bus, getattr(props, "pci_device_id", 0))
     node = gpu_numa_node(addr)
     if node < 0:
         _log(f"cuda:{index} {addr}: numa_node unknown (single-node host?); not binding")
-        return
+        return False, "numa_node unknown"
     cpus = node_cpus(node)
     if cpus:
         os.sched_setaffinity(0, set(cpus))
-    mode = MPOL_BIND if os.environ.get("HOTSPLIT_NUMA_POLICY", "preferred") == "bind" else MPOL_PREFERRED
+    policy = os.environ.get("HOTSPLIT_NUMA_POLICY", "preferred")
+    mode = MPOL_BIND if policy == "bind" else MPOL_PREFERRED
     ok = set_mempolicy(node, mode)
-    _log(f"cuda:{index} {addr} -> node {node}, {len(cpus)} cpus, mempolicy {'set' if ok else 'NOT set'} "
-         f"({'bind' if mode == MPOL_BIND else 'preferred'})")
+    if policy == "preferred" and ok:
+        # honest caveat: preferred is advisory -- the kernel may still place pages on another
+        # node under pressure. Only 'bind' (HOTSPLIT_NUMA_POLICY=bind) hard-guarantees locality.
+        _log(f"cuda:{index} {addr} -> node {node}, {len(cpus)} cpus, mempolicy=preferred (advisory: "
+             "pages may still land on another node under pressure; use HOTSPLIT_NUMA_POLICY=bind "
+             "for a hard guarantee)")
+    else:
+        _log(f"cuda:{index} {addr} -> node {node}, {len(cpus)} cpus, mempolicy {'set' if ok else 'NOT set'} "
+             f"({'bind' if mode == MPOL_BIND else 'preferred'})")
+    if not ok and os.environ.get("HOTSPLIT_NUMA_STRICT", "0") == "1":
+        raise RuntimeError(f"numa_bind: strict mode and set_mempolicy failed on cuda:{index} -> node {node}")
+    return ok, f"node {node} {'bind' if mode == MPOL_BIND else 'preferred'} {'set' if ok else 'NOT set'}"
 
 
 def _device_index(device) -> int | None:
@@ -117,21 +128,28 @@ def _device_index(device) -> int | None:
 
 
 def install() -> None:
-    """Wrap torch.cuda.set_device so the binding happens when a worker picks its GPU."""
-    import torch
+    """Wrap torch.cuda.set_device so the binding happens when a worker picks its GPU.
 
+    Raises RuntimeError under HOTSPLIT_NUMA_STRICT=1 if binding fails.
+    Note: this is best-effort localisation. `preferred` (the default) is advisory; only
+    `HOTSPLIT_NUMA_POLICY=bind` hard-guarantees pinned memory lands on the GPU's node.
+    Verify real placement with `scripts/numastat-report.sh` -- logging is not proof of locality.
+    """
+    import torch
     if getattr(torch.cuda, "_hotsplit_numa_wrapped", False):
         return
     orig = torch.cuda.set_device
-
     def set_device(device):
         orig(device)
         try:
             idx = _device_index(device)
             if idx is not None:
-                bind_for_device(idx)
-        except Exception as e:  # never break worker start-up for a locality optimisation
+                ok, detail = bind_for_device(idx)
+                if not ok and os.environ.get("HOTSPLIT_NUMA_STRICT", "0") == "1":
+                    raise RuntimeError(f"numa_bind strict: cuda:{idx} binding failed: {detail}")
+        except Exception as e:
+            if os.environ.get("HOTSPLIT_NUMA_STRICT", "0") == "1":
+                raise
             _log(f"binding skipped: {e!r}")
-
     torch.cuda.set_device = set_device
     torch.cuda._hotsplit_numa_wrapped = True
