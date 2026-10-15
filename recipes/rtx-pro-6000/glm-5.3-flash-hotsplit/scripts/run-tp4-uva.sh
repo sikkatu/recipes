@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
-# GLM-5.3-Flash on 4x RTX PRO 6000: SGLang TP4 scaffold (no vLLM launcher here).
+# GLM-5.3-Flash on 4x RTX PRO 6000: vLLM TP4 + UVA expert offload BASELINE (no hot/cold split).
 # AUTHORED, NOT RUN ON TARGET HARDWARE. Read ../README.md first.
+#
+# ============ BLOCKER: vLLM glm5_next on SM120 (RTX PRO 6000) ============
+# GLM-5.3-Flash (architecture glm5_next, qk_rope_head_dim=0 / NoPE sparse-MLA) does NOT
+# boot on SM120 (compute 12.0) with vanilla vLLM as of this writing:
+#   vllm-project/vllm#53963 - no SM120 sparse-MLA path for rope-free MLA; three failure
+#                             modes, all ending at "pe_dim must be 64 for fp8_ds_mla"
+#   vllm-project/vllm#55773 - same assert + kernel-dispatch gap (topk buffer widening)
+# Candidate fixes (vllm#55277, vllm#55778, flashinfer-ai/flashinfer#4802) are not merged
+# upstream. This launcher therefore EXPECTS a vLLM build that carries one of those fixes
+# (or an out-of-tree SM120 NoPE patch). Without it the engine will fail during init with
+# the pe_dim assertion - that is a known upstream gap, not a config error. See
+# patches/README.md for the exact state and the runtime hot/cold enforcement seam.
 set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
 
@@ -10,12 +22,19 @@ die(){ echo "ERROR: $*" >&2; exit 1; }
 BIND="${BIND:-127.0.0.1}"
 API_KEY="${API_KEY:-}"
 ALLOW_NO_AUTH="${ALLOW_NO_AUTH:-0}"
-if [ -z "$API_KEY" ] && [ "$ALLOW_NO_AUTH" != "1" ]; then
-  die "API_KEY is required (the API has no auth otherwise). Export a key (e.g. API_KEY=\$(openssl rand -hex 24))
-or set ALLOW_NO_AUTH=1 for a closed debug loop you accept responsibility for."
-fi
+# Order matters: a non-loopback bind ALWAYS requires a key, even with ALLOW_NO_AUTH=1.
+# ALLOW_NO_AUTH=1 only permits an unauthenticated loopback listener (closed debug loop).
 if [ "$BIND" != "127.0.0.1" ] && [ -z "$API_KEY" ]; then
-  die "refusing a non-loopback bind ($BIND) without an API key -- that is a public unauthenticated API"
+  die "refusing a non-loopback bind ($BIND) without an API key -- that is a public unauthenticated API.
+A key is mandatory for any non-loopback bind even when ALLOW_NO_AUTH=1."
+fi
+if [ -z "$API_KEY" ]; then
+  if [ "$ALLOW_NO_AUTH" = "1" ] && [ "$BIND" = "127.0.0.1" ]; then
+    echo "WARNING: running WITHOUT auth on loopback only (ALLOW_NO_AUTH=1) -- closed debug loop."
+  else
+    die "API_KEY is required (the API has no auth otherwise). Export a key (e.g. API_KEY=\$(openssl rand -hex 24)).
+ALLOW_NO_AUTH=1 is accepted ONLY together with BIND=127.0.0.1 (loopback debug)."
+  fi
 fi
 
 # --- contract: image digests, always (no :latest, no floating tags) -------------------------------
@@ -70,6 +89,11 @@ if [ -z "$MODEL_DIR" ]; then
   # remote fetch: pin the checkpoint commit SHA (validated above)
   MODEL_ARGS+=(--revision "$MODEL_REVISION")
 fi
+# --- SM120 / glm5_next preflight warning (does not block a deliberate experiment) ---------
+echo "NOTE: glm5_next (GLM-5.3-Flash) needs a vLLM build with an SM120 NoPE sparse-MLA fix"
+echo "      (vllm#55277 / vllm#55778 / flashinfer#4802 or an out-of-tree patch). Vanilla"
+echo "      upstream vLLM will fail at engine init with 'pe_dim must be 64 for fp8_ds_mla'."
+echo "      See patches/README.md. Proceeding with the pinned IMAGE you provided."
 docker run -d --name "$CONTAINER" --restart no \
   --gpus all --ipc host --network host \
   --ulimit memlock=-1 --ulimit stack=67108864 \

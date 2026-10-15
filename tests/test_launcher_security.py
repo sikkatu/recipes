@@ -35,7 +35,7 @@ def test_no_wide_bind_by_default(slug):
         text = p.read_text()
         assert ("BIND=${BIND:-127.0.0.1}" in text) or ('BIND="${BIND:-127.0.0.1}"' in text), f"{p}: bind must default to loopback"
         # the server bind must follow BIND, not be hard-coded to 0.0.0.0
-        assert '--host "$BIND"' in text or "serve with your SGLang launcher" in text
+        assert '--host "$BIND"' in text, f"{p}: bind must follow BIND"
         assert '--host 0.0.0.0' not in text, f"{p}: hard-coded 0.0.0.0 bind"
 
 
@@ -43,8 +43,6 @@ def test_no_wide_bind_by_default(slug):
 def test_api_key_required_by_default(slug):
     for p in _launchers(slug):
         text = p.read_text()
-        if "serve with your SGLang launcher" in text:
-            continue  # SGLang scaffold exits before serving
         assert "API_KEY" in text, f"{p}: API key handling missing"
         assert "ALLOW_NO_AUTH" in text, f"{p}: no explicit opt-out gate for auth"
         # a non-loopback bind without a key must be refused
@@ -55,8 +53,6 @@ def test_api_key_required_by_default(slug):
 def test_image_pinned_by_digest(slug):
     for p in _launchers(slug):
         text = p.read_text()
-        if "serve with your SGLang launcher" in text:
-            continue
         assert 'IMAGE must be pinned by digest' in text, f"{p}: digest contract not enforced"
 
 
@@ -64,8 +60,6 @@ def test_image_pinned_by_digest(slug):
 def test_model_revision_required_when_fetched(slug):
     for p in _launchers(slug):
         text = p.read_text()
-        if "serve with your SGLang launcher" in text:
-            continue
         assert "MODEL_REVISION" in text, f"{p}: model revision pinning missing"
         assert 'MODEL_REVISION is required when the model is fetched' in text
 
@@ -97,8 +91,6 @@ def test_api_key_actually_passed_to_server():
     for slug in RECIPES:
         for p in _launchers(slug):
             text = p.read_text()
-            if "serve with your SGLang launcher" in text:
-                continue
             assert "VLLM_API_KEY=$API_KEY" in text, f"{p}: API key must be passed to the server"
 
 
@@ -106,8 +98,6 @@ def test_both_probe_requests_authenticated():
     for slug in RECIPES:
         for p in _launchers(slug):
             text = p.read_text()
-            if "serve with your SGLang launcher" in text:
-                continue
             for ln in text.splitlines():
                 if "curl" in ln and "/v1/" in ln and ln.strip().startswith("curl"):
                     assert "Authorization: Bearer $API_KEY" in ln, f"{p}: unauthenticated probe: {ln.strip()}"
@@ -118,8 +108,6 @@ def test_exactly_one_revision_and_no_duplicate_checks():
     for slug in RECIPES:
         for p in _launchers(slug):
             text = p.read_text()
-            if "serve with your SGLang launcher" in text:
-                continue
             assert text.count("--revision") == 1, f"{p}: --revision must appear exactly once"
             assert text.count("IMAGE must be pinned") == 1, f"{p}: duplicate IMAGE check"
             assert text.count("MODEL_REVISION is required") == 1, f"{p}: duplicate revision check"
@@ -133,8 +121,6 @@ def test_no_port_publish_under_host_networking():
     for slug in RECIPES:
         for p in _launchers(slug):
             text = p.read_text()
-            if "serve with your SGLang launcher" in text:
-                continue
             for ln in text.splitlines():
                 if ln.strip().startswith("-p "):
                     pytest.fail(f"{p}: -p under --network host is a no-op: {ln.strip()}")

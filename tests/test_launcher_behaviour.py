@@ -107,8 +107,6 @@ def run_lines_of(log: Path) -> list:
 
 @pytest.mark.parametrize("lp", LAUNCHERS)
 def test_missing_api_key_refuses_before_docker_run(lp, stub_env):
-    if "glm-5.3-flash" in str(lp):
-        pytest.skip("SGLang scaffold exits before serving")
     env, log = stub_env
     r = run_launcher(lp, env, {"API_KEY": "", "IMAGE": "x@sha256:" + "a" * 64})
     assert r.returncode != 0, "missing API key must fail"
@@ -118,8 +116,6 @@ def test_missing_api_key_refuses_before_docker_run(lp, stub_env):
 
 @pytest.mark.parametrize("lp", LAUNCHERS)
 def test_public_bind_without_key_refuses(lp, stub_env):
-    if "glm-5.3-flash" in str(lp):
-        pytest.skip("SGLang scaffold exits before serving")
     env, log = stub_env
     r = run_launcher(lp, env, {"API_KEY": "", "ALLOW_NO_AUTH": "1",
                                "BIND": "0.0.0.0", "IMAGE": "x@sha256:" + "a" * 64})
@@ -129,8 +125,6 @@ def test_public_bind_without_key_refuses(lp, stub_env):
 
 @pytest.mark.parametrize("lp", LAUNCHERS)
 def test_unpinned_image_refuses(lp, stub_env):
-    if "glm-5.3-flash" in str(lp):
-        pytest.skip("SGLang scaffold exits before serving")
     env, log = stub_env
     for bad_image in ("vllm/vllm-openai:v0.31.0", ""):
         r = run_launcher(lp, env, {"API_KEY": "k", "IMAGE": bad_image})
@@ -141,8 +135,6 @@ def test_unpinned_image_refuses(lp, stub_env):
 
 @pytest.mark.parametrize("lp", LAUNCHERS)
 def test_floating_model_revision_refuses(lp, stub_env):
-    if "glm-5.3-flash" in str(lp):
-        pytest.skip("SGLang scaffold exits before serving")
     env, log = stub_env
     env2 = env.copy()
     env2.pop("MODEL_DIR", None)  # force remote-fetch path
@@ -155,8 +147,6 @@ def test_floating_model_revision_refuses(lp, stub_env):
 
 @pytest.mark.parametrize("lp", LAUNCHERS)
 def test_fewer_than_four_gpus_refuses(lp, stub_env):
-    if "glm-5.3-flash" in str(lp):
-        pytest.skip("SGLang scaffold exits before serving")
     env, log = stub_env
     env2 = env.copy()
     env2["GPU_COUNT"] = "2"
@@ -167,8 +157,6 @@ def test_fewer_than_four_gpus_refuses(lp, stub_env):
 
 @pytest.mark.parametrize("lp", LAUNCHERS)
 def test_valid_config_reaches_docker_run_exactly_once(lp, stub_env):
-    if "glm-5.3-flash" in str(lp):
-        pytest.skip("SGLang scaffold exits before serving")
     env, log = stub_env
     # mimo hotsplit verifies the patch manifest; it is satisfied inside the recipe
     r = run_launcher(lp, env, {"API_KEY": "secret", "IMAGE": "x@sha256:" + "a" * 64,
@@ -188,8 +176,6 @@ def test_valid_config_reaches_docker_run_exactly_once(lp, stub_env):
 
 @pytest.mark.parametrize("lp", LAUNCHERS)
 def test_remote_fetch_adds_revision_exactly_once(lp, stub_env):
-    if "glm-5.3-flash" in str(lp):
-        pytest.skip("SGLang scaffold exits before serving")
     env, log = stub_env
     env2 = env.copy()
     env2.pop("MODEL_DIR", None)
@@ -204,8 +190,6 @@ def test_remote_fetch_adds_revision_exactly_once(lp, stub_env):
 
 @pytest.mark.parametrize("lp", LAUNCHERS)
 def test_api_key_reaches_container_env(lp, stub_env):
-    if "glm-5.3-flash" in str(lp):
-        pytest.skip("SGLang scaffold exits before serving")
     env, log = stub_env
     run_launcher(lp, env, {"API_KEY": "secret123", "IMAGE": "x@sha256:" + "a" * 64,
                            "ALLOW_RUN": "1"})
@@ -224,6 +208,42 @@ def test_no_secret_in_dry_run_output(stub_env):
     for line in combined.splitlines():
         assert "supersecret" not in line or "VLLM_API_KEY" in line, \
             f"secret leaked into launcher output: {line}"
+
+
+@pytest.mark.parametrize("lp", LAUNCHERS)
+def test_no_auth_opt_out_refuses_public_bind(lp, stub_env):
+    """P1 regression: ALLOW_NO_AUTH=1 must ONLY work with BIND=127.0.0.1.
+    A non-loopback bind always requires an API key, even with the opt-out set."""
+    env, log = stub_env
+    r = run_launcher(lp, env, {"API_KEY": "", "ALLOW_NO_AUTH": "1",
+                               "BIND": "0.0.0.0", "IMAGE": "x@sha256:" + "a" * 64})
+    assert r.returncode != 0, "ALLOW_NO_AUTH=1 + BIND=0.0.0.0 must be refused"
+    out = r.stdout + r.stderr
+    assert "non-loopback bind" in out or "mandatory" in out or "requires an API key" in out.lower()
+    assert not docker_run_reached(log), "docker run must not be attempted"
+
+
+@pytest.mark.parametrize("lp", LAUNCHERS)
+def test_no_auth_opt_out_allowed_on_loopback(lp, stub_env):
+    """The opt-out is still permitted for a closed loopback debug loop (documented behaviour)."""
+    env, log = stub_env
+    r = run_launcher(lp, env, {"API_KEY": "", "ALLOW_NO_AUTH": "1",
+                               "BIND": "127.0.0.1", "IMAGE": "x@sha256:" + "a" * 64,
+                               "ALLOW_RUN": "1"})
+    # launcher must get past the auth guard to docker run (readiness curl then fails, that is fine)
+    assert "API_KEY is required" not in (r.stdout + r.stderr), \
+        "loopback + ALLOW_NO_AUTH=1 must be accepted"
+    assert docker_run_reached(log), "loopback debug mode must reach docker run"
+
+
+@pytest.mark.parametrize("lp", LAUNCHERS)
+def test_nonloopback_with_key_is_accepted(lp, stub_env):
+    env, log = stub_env
+    r = run_launcher(lp, env, {"API_KEY": "k", "BIND": "0.0.0.0",
+                               "IMAGE": "x@sha256:" + "a" * 64, "ALLOW_RUN": "1"})
+    assert "refusing a non-loopback bind" not in (r.stdout + r.stderr), \
+        "a keyed non-loopback bind must be accepted"
+    assert docker_run_reached(log)
 
 
 if __name__ == "__main__":

@@ -10,12 +10,19 @@ die(){ echo "ERROR: $*" >&2; exit 1; }
 BIND="${BIND:-127.0.0.1}"
 API_KEY="${API_KEY:-}"
 ALLOW_NO_AUTH="${ALLOW_NO_AUTH:-0}"
-if [ -z "$API_KEY" ] && [ "$ALLOW_NO_AUTH" != "1" ]; then
-  die "API_KEY is required (the API has no auth otherwise). Export a key (e.g. API_KEY=\$(openssl rand -hex 24))
-or set ALLOW_NO_AUTH=1 for a closed debug loop you accept responsibility for."
-fi
+# Order matters: a non-loopback bind ALWAYS requires a key, even with ALLOW_NO_AUTH=1.
+# ALLOW_NO_AUTH=1 only permits an unauthenticated loopback listener (closed debug loop).
 if [ "$BIND" != "127.0.0.1" ] && [ -z "$API_KEY" ]; then
-  die "refusing a non-loopback bind ($BIND) without an API key -- that is a public unauthenticated API"
+  die "refusing a non-loopback bind ($BIND) without an API key -- that is a public unauthenticated API.
+A key is mandatory for any non-loopback bind even when ALLOW_NO_AUTH=1."
+fi
+if [ -z "$API_KEY" ]; then
+  if [ "$ALLOW_NO_AUTH" = "1" ] && [ "$BIND" = "127.0.0.1" ]; then
+    echo "WARNING: running WITHOUT auth on loopback only (ALLOW_NO_AUTH=1) -- closed debug loop."
+  else
+    die "API_KEY is required (the API has no auth otherwise). Export a key (e.g. API_KEY=\$(openssl rand -hex 24)).
+ALLOW_NO_AUTH=1 is accepted ONLY together with BIND=127.0.0.1 (loopback debug)."
+  fi
 fi
 
 # --- contract: image digests, always (no :latest, no floating tags) -------------------------------
