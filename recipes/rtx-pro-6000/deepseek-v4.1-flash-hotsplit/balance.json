@@ -1,0 +1,10 @@
+{
+  "layers": 40,
+  "experts": 384,
+  "shared_experts": 1,
+  "topk": 6,
+  "hidden": 5120,
+  "moe_intermediate": 2304,
+  "cell_mib_full": 17.9,
+  "tp": 4
+}

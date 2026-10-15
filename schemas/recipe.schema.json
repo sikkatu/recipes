@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/sikkatu/recipes/main/schemas/recipe.schema.json",
+  "title": "Recipe (recipe/v1)",
+  "description": "Machine-readable contract for one serving recipe. A recipe is verified only when every gate has a recorded pass and every published metric resolves to a results bundle.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "title", "status", "owners", "model", "hardware", "runtime", "launch", "verification", "limits", "rollback", "updated"],
+  "properties": {
+    "schema": { "const": "recipe/v1" },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]*/[a-z0-9][a-z0-9.-]*$", "description": "<hardware-slug>/<recipe-slug>, matches the directory path under recipes/" },
+    "title": { "type": "string", "minLength": 8 },
+    "summary": { "type": "string" },
+    "status": { "enum": ["draft", "experimental", "verified", "deprecated"] },
+    "owners": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "updated": { "type": "string", "format": "date" },
+    "tags": { "type": "array", "items": { "type": "string" } },
+
+    "model": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "repo", "revision", "quantization"],
+      "properties": {
+        "name": { "type": "string" },
+        "repo": { "type": "string", "description": "Hugging Face repo id or URL" },
+        "revision": { "type": "string", "pattern": "^[0-9a-f]{40}$", "description": "full git SHA of the checkpoint revision, not a branch name" },
+        "quantization": { "type": "string" },
+        "params": { "type": "string" },
+        "draft": {
+          "type": "object", "additionalProperties": false,
+          "required": ["repo", "revision"],
+          "properties": { "repo": { "type": "string" }, "revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" }, "method": { "type": "string" } }
+        }
+      }
+    },
+
+    "hardware": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile", "observed"],
+      "properties": {
+        "profile": { "type": "string", "description": "path to hardware/<slug>.yaml" },
+        "nominal": { "type": "object", "description": "spec-sheet numbers (informational)" },
+        "observed": {
+          "type": "object", "additionalProperties": true,
+          "required": ["gpu", "driver", "cuda", "gpu_memory_visible_gib", "os", "kernel", "snapshot"],
+          "properties": {
+            "gpu": { "type": "string" },
+            "driver": { "type": "string" },
+            "cuda": { "type": "string" },
+            "gpu_memory_visible_gib": { "type": "number", "description": "what nvidia-smi / torch report as usable, NOT the spec sheet" },
+            "host_memory_gib": { "type": "number" },
+            "os": { "type": "string" },
+            "kernel": { "type": "string" },
+            "snapshot": { "type": "string", "description": "path to results/<run-id>/system.json that this block was copied from" }
+          }
+        },
+        "required_settings": { "type": "array", "items": { "type": "string" }, "description": "BIOS/driver/kernel settings the recipe depends on (e.g. CDMM on)" }
+      }
+    },
+
+    "runtime": {
+      "type": "object", "additionalProperties": false,
+      "required": ["engine", "engine_version", "container"],
+      "properties": {
+        "engine": { "type": "string" },
+        "engine_version": { "type": "string" },
+        "engine_commit": { "type": "string" },
+        "container": {
+          "type": "object", "additionalProperties": false,
+          "required": ["image", "digest"],
+          "properties": {
+            "image": { "type": "string", "not": { "pattern": ":latest$" } },
+            "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+            "dockerfile": { "type": "string" },
+            "dockerfile_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "base_image": { "type": "string" }
+          }
+        },
+        "key_libraries": { "type": "object", "additionalProperties": { "type": "string" }, "description": "name -> exact version (torch, flashinfer, triton...)" },
+        "patches": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["path", "sha256", "purpose"],
+            "properties": { "path": { "type": "string" }, "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "purpose": { "type": "string" } }
+          }
+        }
+      }
+    },
+
+    "launch": {
+      "type": "object", "additionalProperties": false,
+      "required": ["script", "command"],
+      "properties": {
+        "script": { "type": "string", "description": "path to the launch script in this recipe" },
+        "command": { "type": "string", "description": "the exact command a reader runs" },
+        "health": { "type": "string", "description": "how readiness is detected" },
+        "warmup": { "type": "string" },
+        "notable_flags": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "metrics": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "value", "unit", "workload", "provenance"],
+        "properties": {
+          "name": { "type": "string" },
+          "value": { "type": "number" },
+          "unit": { "type": "string" },
+          "workload": { "type": "string", "description": "concurrency, prompt/output lengths, prompt class" },
+          "aggregation": { "type": "string", "description": "mean of n=3, single run, median..." },
+          "label": { "type": "string", "description": "e.g. 'pre-router-fix' — caveats that must travel with the number" },
+          "provenance": {
+            "type": "object", "additionalProperties": false,
+            "required": ["run_id", "method", "raw"],
+            "properties": {
+              "run_id": { "type": "string", "description": "results/<run-id>/ directory in this recipe" },
+              "method": { "type": "string" },
+              "raw": { "type": "string", "description": "path (in results/<run-id>/) to the file the number was read from" }
+            }
+          }
+        }
+      }
+    },
+
+    "verification": {
+      "type": "object", "additionalProperties": false,
+      "required": ["gates"],
+      "properties": {
+        "gates": {
+          "type": "object", "additionalProperties": false,
+          "required": ["schema", "digest", "health", "quality", "performance"],
+          "properties": {
+            "schema":      { "$ref": "#/$defs/gate" },
+            "digest":      { "$ref": "#/$defs/gate" },
+            "health":      { "$ref": "#/$defs/gate" },
+            "quality":     { "$ref": "#/$defs/gate" },
+            "performance": { "$ref": "#/$defs/gate" }
+          }
+        },
+        "quality_gate": {
+          "type": "object", "additionalProperties": false,
+          "required": ["reference_build", "method"],
+          "properties": {
+            "reference_build": { "type": "string" },
+            "method": { "type": "string" },
+            "corpus_sha256": { "type": "string" },
+            "positions": { "type": "integer" },
+            "floor_run_id": { "type": "string", "description": "run that measured the reference build's own variance (e.g. compiled vs eager)" },
+            "thresholds": { "type": "object", "additionalProperties": { "type": "number" } },
+            "never": { "type": "array", "items": { "type": "string" }, "description": "hard rules no metric can override" }
+          }
+        }
+      }
+    },
+
+    "limits": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "rollback": {
+      "type": "object", "additionalProperties": false,
+      "required": ["script", "summary"],
+      "properties": { "script": { "type": "string" }, "summary": { "type": "string" } }
+    },
+    "links": { "type": "object", "additionalProperties": { "type": "string" } }
+  },
+
+  "$defs": {
+    "gate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["how"],
+      "properties": {
+        "how": { "type": "string", "description": "what is run and what passing means" },
+        "last_pass_utc": { "type": "string", "format": "date-time" },
+        "run_id": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}
