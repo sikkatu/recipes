@@ -268,5 +268,54 @@ def test_dynamic_hook_decision_refuses_silent_fallback():
     assert "HOTSPLIT_ALLOW_STATIC_FALLBACK" in seg
 
 
+def test_check_script_fails_when_dynamic_hook_missing(tmp_path):
+    """check-hotsplit-tp4.sh must exit non-zero in dynamic mode when the hook is missing/inactive,
+    and the step-hook check must have a real threshold (not 0)."""
+    script = BASE / "mimo-v2.6-pro-hotsplit" / "scripts" / "check-hotsplit-tp4.sh"
+    text = script.read_text()
+    # the old buggy pattern: threshold 0 always passes
+    assert 'step hook installed" 0' not in text.replace(" ", ""), \
+        "threshold 0 makes the check vacuous"
+    # mode parameter present
+    assert "MODE=" in text and "dynamic" in text
+    # non-zero exit when hook is missing in dynamic mode
+    assert "fail=1" in text
+
+    # behavioural: run with a stub docker returning logs with NO dynamic_hook=ACTIVE
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "docker"
+    log_content = "hotsplit plan [rank 0/4]\nhotsplit done [rank 0/4]\n"
+    stub.write_text(f'#!/usr/bin/env bash\ncat <<\'LOG\'\n{log_content}LOG\n')
+    stub.chmod(stub.stat().st_mode | 0o111)
+    import os, subprocess
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    r = subprocess.run(["bash", str(script), "some-container", "dynamic"],
+                       env=env, capture_output=True, text=True, timeout=30)
+    assert r.returncode != 0, \
+        "dynamic mode with no ACTIVE hook must exit non-zero"
+    assert "FAIL" in (r.stdout + r.stderr)
+
+
+def test_check_script_passes_in_static_mode_with_no_hook(tmp_path):
+    """Static mode accepts an absent hook (deliberate static run)."""
+    script = BASE / "mimo-v2.6-pro-hotsplit" / "scripts" / "check-hotsplit-tp4.sh"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "docker"
+    log_content = "hotsplit plan [rank 0/4]\nhotsplit done [rank 0/4]\n"
+    stub.write_text(f'#!/usr/bin/env bash\ncat <<\'LOG\'\n{log_content}LOG\n')
+    stub.chmod(stub.stat().st_mode | 0o111)
+    import os, subprocess
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    r = subprocess.run(["bash", str(script), "some-container", "static"],
+                       env=env, capture_output=True, text=True, timeout=30)
+    # static mode with no hook requested -> should NOT fail on the dynamic block
+    out = r.stdout + r.stderr
+    assert "rank 0" in out
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

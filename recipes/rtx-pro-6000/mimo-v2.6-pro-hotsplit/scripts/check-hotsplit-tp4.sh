@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Reads the container logs and reports which hotsplit stages actually happened.
-# usage: check-hotsplit-tp4.sh [container]   (default mimo-pro-tp4-hotsplit)
+# usage: check-hotsplit-tp4.sh [container] [MODE: dynamic|static]   (default: mimo-pro-tp4-hotsplit, dynamic)
 #
 # Diagnostic only — it does not prove that the dynamic counter INCREASED during generation.
 # For that, generate text while this script watches, then re-run it: the "dynamic update"
@@ -11,6 +11,9 @@
 # is logged by hotsplit.py itself (dynamic_hook=ACTIVE / dynamic_hook=INACTIVE).
 set -u
 C="${1:-mimo-pro-tp4-hotsplit}"
+# MODE: dynamic (default) or static. The check is mode-aware: in dynamic mode a missing or
+# inactive hook on any rank is a FAIL (exit 1), not just a note.
+MODE="${2:-dynamic}"
 L="$(docker logs "$C" 2>&1)" || { echo "cannot read logs of $C" >&2; exit 2; }
 fail=0
 chk(){ # label, regex, expected count (default >=1)
@@ -35,19 +38,43 @@ echo "== hotsplit stages =="
 chk "hotsplit plan logged on every rank"      "hotsplit plan \[rank [0-9]/4\]" 4
 chk "hotsplit finished on every rank"         "hotsplit done \[rank [0-9]/4\]" 4
 echo
-echo "== dynamic mode =="
-# The dynamic hook status is per rank: ACTIVE or INACTIVE (both deliberate) or absent (= not reached)
-dyn_active="$(grep -Ec 'dynamic_hook=ACTIVE' <<<"$L")"
-dyn_inactive="$(grep -Ec 'dynamic_hook=INACTIVE' <<<"$L")"
-if [ "$dyn_active" -ge 1 ]; then
-  echo "PASS  dynamic_hook=ACTIVE ($dyn_active ranks)"
-else
-  echo "MISS  dynamic_hook=ACTIVE (0; inactive=$dyn_inactive)"
-fi
+echo "== dynamic mode (MODE=$MODE) =="
+# Per-rank check: every rank must report dynamic_hook=ACTIVE in dynamic mode.
+# In static mode every rank must report dynamic_hook=INACTIVE (or absent if the run is static
+# by design). A missing status line means the rank never reached the decision point -- a hard
+# miss, not a warning. Exit code is non-zero if the required mode is not active on all ranks.
+for r in 0 1 2 3; do
+  st="$(grep -Eo "\[rank $r/4\].*dynamic_hook=[A-Z]+" <<<"$L" | grep -Eo 'dynamic_hook=[A-Z]+' | tail -1)"
+  case "$MODE" in
+    dynamic)
+      if [ "$st" = "dynamic_hook=ACTIVE" ]; then
+        echo "PASS  rank $r: $st"
+      else
+        echo "FAIL  rank $r: ${st:-NO STATUS} (dynamic mode requires ACTIVE)"; fail=1
+      fi
+      ;;
+    static)
+      if [ "$st" = "dynamic_hook=INACTIVE" ] || [ -z "$st" ]; then
+        echo "PASS  rank $r: ${st:-INACTIVE (no dynamic request)}"
+      else
+        echo "FAIL  rank $r: $st (static mode expects INACTIVE)"; fail=1
+      fi
+      ;;
+    *)
+      echo "FAIL  unknown MODE '$MODE' (use dynamic or static)"; fail=1
+      ;;
+  esac
+done
 if grep -q 'dynamic_hook=FAILED' <<<"$L"; then
   echo "FAIL  dynamic_hook=FAILED on at least one rank"; fail=1
 fi
-chk "dynamic step hook installed (if requested)" "hotsplit dynamic: step hook installed" 0
+if [ "$MODE" = "dynamic" ]; then
+  # in dynamic mode the step hook must be installed on every rank
+  chk "dynamic step hook installed on every rank" "hotsplit dynamic: step hook installed" 4
+else
+  # in static mode the hook may be absent; note it, do not fail
+  chk "dynamic step hook (static mode, optional)" "hotsplit dynamic: step hook installed" 0
+fi
 echo
 echo "== live counter =="
 chk "live counter registered"                 "hotsplit live counter"
@@ -71,6 +98,11 @@ echo "Locality (should show the pinned expert memory on the node of each GPU, no
 echo "  for p in \$(pgrep -f 'VLLM|vllm' | head -8); do echo PID \$p; numastat -p \$p | tail -3; done"
 echo
 echo "NOTE: this script reads logs only. To prove the dynamic counter moves during generation,"
-echo "      run a few requests and re-run this script: $n_updates should grow and"
-echo "      live/counts.rank*.json timestamps should advance."
+echo "      run a few requests and re-run this script: the dynamic update count above should grow"
+echo "      and live/counts.rank*.json timestamps should advance. In dynamic mode (MODE=$MODE)"
+echo "      a zero update count after real traffic means the counter never fired -- treat as a FAIL."
+if [ "$MODE" = "dynamic" ] && [ "${n_updates:-0}" -eq 0 ]; then
+  echo "FAIL  dynamic mode requested but no 'hotsplit dynamic update' lines found -- counter never fired"
+  fail=1
+fi
 exit "$fail"
