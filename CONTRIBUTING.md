@@ -1,5 +1,8 @@
 # Contributing a recipe
 
+> **English** | [Русский](CONTRIBUTING.ru.md) | [中文](CONTRIBUTING.zh.md)
+
+
 A recipe is a promise: *on this exact hardware, with this exact software, this command produces these numbers, measured this way.* Everything in this file exists to keep that promise checkable by a stranger with the same box.
 
 ## The contract

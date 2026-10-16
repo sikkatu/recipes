@@ -1,5 +1,8 @@
 # Benchmarking recipes with llm-inference-bench
 
+> **English** | [Русский](benchmarking.ru.md) | [中文](benchmarking.zh.md)
+
+
 Every recipe's throughput and quality rows that come from a standard bench use one pinned tool:
 [`local-inference-lab/llm-inference-bench`](https://github.com/local-inference-lab/llm-inference-bench).
 Our own instruments (knee/replay/teacher-forced divergence/BFCL gate) stay authoritative for

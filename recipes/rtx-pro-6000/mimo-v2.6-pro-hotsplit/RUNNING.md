@@ -1,5 +1,8 @@
 # MiMo-V2.6-Pro on 4× RTX PRO 6000
 
+> **English** | [Русский](RUNNING.ru.md) | [中文](RUNNING.zh.md)
+
+
 This launches a **stock vLLM TP4 + UVA expert-offload baseline**. It does not claim that the custom Hotsplit patch has been ported or validated for TP4.
 
 Requirements: Linux, NVIDIA driver, Docker + NVIDIA Container Toolkit, four visible GPUs, and hundreds of GB of free disk.

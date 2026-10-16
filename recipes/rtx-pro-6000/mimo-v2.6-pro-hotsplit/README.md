@@ -1,5 +1,8 @@
 # MiMo-V2.6-Pro — 4× RTX PRO 6000 (TP4): UVA expert offload + hotsplit
 
+> **English** | [Русский](README.ru.md) | [中文](README.zh.md)
+
+
 **Status: authored, not run on target hardware.** Nothing in `patches/` or `scripts/run-tp4-hotsplit.sh` has been executed on a 4-GPU machine. The pure planning logic has unit tests (`tests/test_hotsplit_tp4.py`); the vLLM/CUDA parts have only been syntax-checked. Treat the first boot as an experiment and send the logs back.
 
 Target host: 4× RTX PRO 6000 Blackwell Workstation Edition — 96 GB GDDR7 with ECC each (1792 GB/s per card). The cards are PCIe Gen 5, but in this machine the host slots train at **PCIe 4.0**, so the GPU-to-host link is Gen 4 (~25 GB/s per GPU); host RAM is DDR4. No NVLink. The CPU is whatever the machine reports (`lscpu`, `/proc/meminfo`).

@@ -1,5 +1,8 @@
 # GLM-5.3-Flash — 4× RTX PRO 6000 (96 GB), TP4: expert balance for UVA expert offload
 
+> **English** | [Русский](README.ru.md) | [中文](README.zh.md)
+
+
 **Status: engineering balance + tooling, not a verified serving run.** What is real and checked
 here is the *expert balance* — which routed experts belong in GPU memory and which in pinned host
 memory, and the per-rank byte budgets — computed with the exact same unit-tested planner as

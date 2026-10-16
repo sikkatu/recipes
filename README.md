@@ -1,7 +1,10 @@
 # 4x RTX PRO 6000 Recipes
 
+> **English** | [Русский](README.ru.md) | [中文](README.zh.md)
+
+
 Hardware-pinned, verified recipes for serving large open-weight LLMs on **4 x RTX PRO 6000
-(96 GB GDDR7, TP4, PCIe 4.0 host slots (cards are Gen 5), no NVLink)**. **Every number has a method.**
+(96 GB GDDR7, TP4, PCIe 4.0 host slots (cards are Gen 5), no NVLink)**.
 
 A recipe here promises: on *this* hardware (as the machine reports it, not the spec sheet), with
 *this* container digest and model revision, *this* command produces *these* numbers, measured
@@ -28,6 +31,8 @@ Recipes are MIT; models and engines carry their own licenses and their authors' 
 The four recipes below balance **routed-expert residency** on the workstation: which MoE experts
 sit in GPU memory and which are read from pinned host memory over PCIe. The balance is computed with one
 shared, unit-tested planner (greedy hot set by routing share per byte) sized per model geometry.
+
+**Full guide lives in the [Wiki](https://github.com/sikkatu/recipes/wiki):** [Quick Start](https://github.com/sikkatu/recipes/wiki/Quick-Start) · [How Expert Balance Works](https://github.com/sikkatu/recipes/wiki/How-Expert-Balance-Works) · [Models & Geometry](https://github.com/sikkatu/recipes/wiki/Models-and-Geometry) · [FAQ](https://github.com/sikkatu/recipes/wiki/FAQ)
 
 ## How a recipe is laid out
 

@@ -1,5 +1,8 @@
 # Runtime enforcement seam
 
+> **English** | [Русский](README.ru.md) | [中文](README.zh.md)
+
+
 This recipe's *balance* (which experts go to GPU memory vs pinned host) is model-independent and fully
 checked: `hotsplit_plan.py` + `hotsplit_balance.py` + `balance.json`. What is model-specific is the
 vLLM (MXFP4 routed experts) hook that **enforces** the split at weight-load time.
