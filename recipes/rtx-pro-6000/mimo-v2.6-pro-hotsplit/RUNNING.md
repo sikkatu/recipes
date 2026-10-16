@@ -74,3 +74,28 @@ node is full). To measure the real placement:
    `HOTSPLIT_NUMA_POLICY=preferred`, `=bind`, and `HOTSPLIT_NUMA=0` (no binding).
 3. Measure host-to-device bandwidth on the same payload for each; the difference is the
    real cost/benefit of the binding, not the log line.
+
+## Measuring real effectiveness (update count is not proof)
+A moving update counter proves the planner runs; it does NOT prove the dynamic mode pays for
+itself. To measure the actual effect, on the same workload and the same request set:
+1. Run static (`HOTSPLIT_DYNAMIC=0`) and dynamic (`HOTSPLIT_DYNAMIC=1`) with identical
+   `HOTSPLIT_HOT_GIB`, model revision and sampling params.
+2. Record TTFT and inter-token latency per request (vLLM logs them per request; `nvidia-smi dmon`
+   -s u shows PCIe RX/TX bytes for the card during the run). Cold-bank hits appear as host-link
+   traffic; a working dynamic mode moves traffic from the cold path to the hot path over time.
+3. Watch the `hotsplit dynamic hit-rate` log line after each update: it reports hot vs cold
+   routed-row split and the swap cost. The hot share should trend up against the offline plan;
+   if it does not, the live traffic differs from `HOTSPLIT_COUNTS` -- re-run `balance.sh`.
+4. Note the live counter includes padded slots of captured batches (`live lane counts incl.
+   padded slots` in the snapshot meta). The bias is small at decode sizes but compare static
+   and dynamic runs at the same `MAX_NUM_SEQS` and batch shape to cancel it.
+
+## Race check for dynamic swaps (P0-2)
+The swap copies run on a dedicated CUDA stream and are published to the compute stream via a
+CUDA event, so a decode-graph replay cannot observe a half-applied swap. To verify on hardware:
+1. Start with `HOTSPLIT_DYNAMIC=1` and generate continuously while updates fire
+   (`HOTSPLIT_DYN_LOG=1` shows each update).
+2. Run the same traffic under `compute-sanitizer --tool racecheck` (or `memcheck`) and confirm
+   no races are reported between the swap kernels and the MoE kernels.
+3. Greedy outputs during a swap window must match a static run with the same inputs up to the
+   documented hot-set change; weight-integrity errors (NaN, wrong expert routing) are a FAIL.

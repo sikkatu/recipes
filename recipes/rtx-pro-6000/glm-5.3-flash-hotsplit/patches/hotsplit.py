@@ -340,6 +340,40 @@ def _split_layer_static(layer, hot_ids: list[int], E: int, make_kernel, make_qcf
 # --------------------------------------------------------------------------------------------------
 # dynamic split: cold bank = every expert (host), hot bank = fixed GDDR7 slots, two persistent maps
 # --------------------------------------------------------------------------------------------------
+def _dyn_int(name: str, default: str, lo: int, hi: int | None = None) -> int:
+    """Read an integer env var with a hard range check. Invalid values raise at startup --
+    a bad value must not survive into a modulo/ZeroDivisionError deep inside the step hook,
+    where the wrapper would swallow it and leave a "dynamic" run that never updates."""
+    raw = os.environ.get(name, default)
+    try:
+        v = int(raw)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"hotsplit: {name}={raw!r} is not an integer") from e
+    if v < lo or (hi is not None and v > hi):
+        raise ValueError(f"hotsplit: {name}={v} out of range [{lo}, {hi if hi is not None else 'inf'}]")
+    return v
+
+
+def _dyn_float(name: str, default: str, lo: float, hi: float | None = None) -> float:
+    """Same contract as _dyn_int for float parameters."""
+    raw = os.environ.get(name, default)
+    try:
+        v = float(raw)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"hotsplit: {name}={raw!r} is not a number") from e
+    if not (v >= lo) or (hi is not None and not (v <= hi)):
+        raise ValueError(f"hotsplit: {name}={v} out of range [{lo}, {hi if hi is not None else 'inf'}]")
+    return v
+
+
+class _null_ctx:
+    """No-op context manager so the swap code has one shape for CPU and GPU."""
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        return False
+
+
 class _DynLayer:
     def __init__(self, li, hot, hw13, hw2, hs13, hs2, c13, c2, s13, s2):
         self.li, self.hot = li, list(hot)  # hot[slot] = expert id
@@ -356,15 +390,25 @@ class _Dyn:
         self.emap_hot = torch.full((n, E), -1, dtype=torch.int32, device=dev)
         self.emap_cold = torch.arange(E, dtype=torch.int32, device=dev).unsqueeze(0).repeat(n, 1).contiguous()
         self.layers: dict[int, _DynLayer] = {}
-        self.every = int(os.environ.get("HOTSPLIT_DYN_STEPS", "2000"))
-        self.max_swaps = int(os.environ.get("HOTSPLIT_DYN_MAX_SWAPS", "2"))
-        self.decay = float(os.environ.get("HOTSPLIT_DYN_DECAY", "0.5"))
-        self.margin = float(os.environ.get("HOTSPLIT_DYN_MARGIN", "1.25"))
-        self.prior_tokens = float(os.environ.get("HOTSPLIT_DYN_PRIOR_TOKENS", "2000"))
-        self.topk = int(os.environ.get("HOTSPLIT_TOPK", "8"))
+        # All scheduler parameters are validated at startup. `every` in particular must be > 0:
+        # `self.steps % self.every` with every=0 is a ZeroDivisionError that the step-hook
+        # wrapper used to swallow, leaving a server that answers while never updating.
+        self.every = _dyn_int("HOTSPLIT_DYN_STEPS", "2000", lo=1)
+        self.max_swaps = _dyn_int("HOTSPLIT_DYN_MAX_SWAPS", "2", lo=1, hi=1024)
+        self.decay = _dyn_float("HOTSPLIT_DYN_DECAY", "0.5", lo=0.0, hi=1.0)
+        self.margin = _dyn_float("HOTSPLIT_DYN_MARGIN", "1.25", lo=1.0)
+        self.prior_tokens = _dyn_float("HOTSPLIT_DYN_PRIOR_TOKENS", "2000", lo=0.0)
+        self.topk = _dyn_int("HOTSPLIT_TOPK", "8", lo=1)
         self.log_updates = os.environ.get("HOTSPLIT_DYN_LOG", "1") == "1"
+        # Success/error accounting for the planner. `plan_ok` counts real planning passes,
+        # `updates` counts committed swaps, `plan_errors` counts swallowed failures. The hook
+        # makes repeated errors fatal (see _install_step_hook), so this is auditable afterwards.
+        self.plan_ok = 0
+        self.plan_errors = 0
+        self.max_plan_errors = _dyn_int("HOTSPLIT_DYN_MAX_PLAN_ERRORS", "3", lo=1)
         self.steps = 0
         self.updates = 0
+        self.stream = None  # dedicated CUDA stream for weight swaps (P0-2)
         self.prev: np.ndarray | None = None
         self.crow: dict[int, int] = {}
         self.score: dict[int, np.ndarray] = {}
@@ -391,6 +435,8 @@ class _Dyn:
         snap = live.buf.to("cpu").numpy().copy()
         delta = (snap - self.prev).astype(np.float64)
         self.prev = snap
+        self.plan_ok += 1
+        self.plan_errors = 0  # a good pass resets the consecutive-error count
         plans = []
         for li, dl in self.layers.items():
             c = self.crow.get(li)
@@ -414,6 +460,23 @@ class _Dyn:
             return
         t0 = time.time()
         dev = _dev()
+        # P0-2: run the swap copies on a dedicated stream and publish them to the compute
+        # stream through a CUDA event. Relying on "the hook runs before execute_model on the
+        # same thread" is not a guarantee across vLLM versions: if execute_model is entered on
+        # a different stream than the one that replays the decode graph, the graph could read
+        # the hot/cold banks while they are being rewritten. `stream.wait_stream(current)`
+        # orders the copies after everything enqueued so far; the event + `current.wait_event`
+        # orders every reader after the copies. Both are no-ops on CPU (unit tests).
+        use_stream = dev.type == "cuda"
+        if use_stream:
+            if self.stream is None:
+                self.stream = torch.cuda.Stream(device=dev)
+            stream = self.stream
+            stream.wait_stream(torch.cuda.current_stream(device=dev))
+            swap_ctx = torch.cuda.stream(stream)
+        else:
+            stream = None
+            swap_ctx = None
         staged = []
         hr, hc, hv, cr, cc, cv = [], [], [], [], [], []
         for dl, sw in plans:
@@ -429,13 +492,18 @@ class _Dyn:
         t_cc = torch.tensor(cc, dtype=torch.long, device=dev)
         t_cv = torch.tensor(cv, dtype=torch.int32, device=dev)
         # ---- point of no return ----
-        for dl, slots, new in staged:
-            dl.hw13.index_copy_(0, slots, dl.c13.index_select(0, new))
-            dl.hw2.index_copy_(0, slots, dl.c2.index_select(0, new))
-            dl.hs13.index_copy_(0, slots, dl.s13.index_select(0, new))
-            dl.hs2.index_copy_(0, slots, dl.s2.index_select(0, new))
-        self.emap_hot[t_hr, t_hc] = t_hv
-        self.emap_cold[t_cr, t_cc] = t_cv
+        with (swap_ctx if swap_ctx is not None else _null_ctx()):
+            for dl, slots, new in staged:
+                dl.hw13.index_copy_(0, slots, dl.c13.index_select(0, new))
+                dl.hw2.index_copy_(0, slots, dl.c2.index_select(0, new))
+                dl.hs13.index_copy_(0, slots, dl.s13.index_select(0, new))
+                dl.hs2.index_copy_(0, slots, dl.s2.index_select(0, new))
+            self.emap_hot[t_hr, t_hc] = t_hv
+            self.emap_cold[t_cr, t_cc] = t_cv
+            if use_stream:
+                ev = torch.cuda.Event()
+                ev.record(stream)
+                torch.cuda.current_stream(device=dev).wait_event(ev)
         n = 0
         for dl, sw in plans:
             for slot, _, e_in in sw:
@@ -446,6 +514,45 @@ class _Dyn:
             _sync()
             logger.info("hotsplit dynamic update #%d at step %d: %d swaps in %d layers, %.0f ms",
                         self.updates, self.steps, n, len(plans), 1000 * (time.time() - t0))
+            self.log_hit_rates(n, time.time() - t0)
+
+    def log_hit_rates(self, swapped_rows: int, secs: float) -> None:
+        """P1 effectiveness telemetry: how the router traffic is split between the GPU hot
+        bank and the host cold bank right now, plus the cost of this update. This is the number
+        that must move for the dynamic mode to be worth anything: hot-bank hit ratio up,
+        cold (PCIe) share down. Bytes are counted at the routed-row level (topk dispatches),
+        which is what the banks actually transfer on a cold hit."""
+        live = _LIVE
+        if live is None or live.buf is None or not self.layers:
+            return
+        try:
+            snap = live.buf.to("cpu", non_blocking=False).numpy()
+            hot_hits = cold_hits = 0
+            for li, dl in self.layers.items():
+                r = self.rows.get(li)
+                if r is None:
+                    continue
+                counts = snap[r]
+                hot_set = set(dl.hot)
+                for e, c in enumerate(counts.tolist()):
+                    if not c:
+                        continue
+                    if e in hot_set:
+                        hot_hits += c
+                    else:
+                        cold_hits += c
+            total = hot_hits + cold_hits
+            if total:
+                # row sizes are model constants; report the routed-row split and the PCIe
+                # traffic this split implies on the host link
+                logger.info(
+                    "hotsplit dynamic hit-rate: hot %d / cold %d of %d routed rows (%.1f%% hot, "
+                    "%.1f%% cold -> PCIe); %d rows swapped in %.0f ms",
+                    hot_hits, cold_hits, total,
+                    100.0 * hot_hits / total, 100.0 * cold_hits / total,
+                    swapped_rows, 1000 * secs)
+        except Exception as e:  # telemetry must never take the lane down
+            logger.warning("hotsplit dynamic hit-rate telemetry failed: %r", e)
 
 
 def _split_layer_dynamic(layer, hot_ids: list[int], E: int, make_kernel, make_qcfg, li: int, dyn: _Dyn) -> None:
@@ -528,14 +635,22 @@ def _install_step_hook(dyn: _Dyn) -> bool:
     if getattr(GPUModelRunner, "_hotsplit_wrapped", False):
         return True
     orig = GPUModelRunner.execute_model
-
     @functools.wraps(orig)
     def wrapped(self, *args, **kwargs):
         plans = None
         try:
             plans = dyn.plan()
         except Exception as e:  # planning is read-only; skip this update
-            logger.warning("hotsplit dynamic: planning failed (%r); skipping this update", e)
+            dyn.plan_errors += 1
+            # P0-1: a planner that keeps failing is worse than a stopped server -- the run
+            # keeps claiming dynamic_hook=ACTIVE while the hot set never adapts. Repeat
+            # offenders (HOTSPLIT_DYN_MAX_PLAN_ERRORS, default 3) are fatal.
+            logger.error("hotsplit dynamic: planning failed (%r); error %d of %d before abort",
+                         e, dyn.plan_errors, dyn.max_plan_errors)
+            if dyn.plan_errors >= dyn.max_plan_errors:
+                raise RuntimeError(
+                    f"hotsplit dynamic: planner failed {dyn.plan_errors} times in a row "
+                    f"({e!r}); refusing to keep serving with a dead dynamic hook") from e
         if plans:
             dyn.commit(plans)  # deliberately not wrapped: a failure after the copy must be loud
         return orig(self, *args, **kwargs)
