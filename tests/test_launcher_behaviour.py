@@ -260,3 +260,51 @@ def test_nonloopback_with_key_is_accepted(lp, stub_env):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+# ------------------------------------------------ manage.sh day-to-day wrapper (mimo recipe)
+MANAGE = BASE / "mimo-v2.6-pro-hotsplit" / "scripts" / "manage.sh"
+
+
+def test_manage_sh_usage_without_docker(tmp_path):
+    """`manage.sh` with no args must print usage and exit 1 even when docker is missing."""
+    import shutil
+    bash = shutil.which("bash") or "/usr/bin/bash"
+    # minimal PATH with the coreutils the usage path needs (dirname, sed) but no docker
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for tool in ("dirname", "sed"):
+        src = shutil.which(tool)
+        if src:
+            (bin_dir / tool).symlink_to(src)
+    env = os.environ.copy()
+    env["PATH"] = str(bin_dir)
+    r = subprocess.run([bash, str(MANAGE)], env=env, capture_output=True, text=True, timeout=30)
+    assert r.returncode == 1
+    out = r.stdout + r.stderr
+    for cmd in ("status", "logs", "start", "stop", "restart", "update", "rollback", "check"):
+        assert cmd in out, f"usage must document {cmd}"
+
+
+def test_manage_sh_status_reports_containers(stub_env):
+    env, log = stub_env
+    r = subprocess.run(["bash", str(MANAGE), "status"], env=env, capture_output=True, text=True, timeout=30)
+    out = r.stdout + r.stderr
+    assert "mimo-pro-tp4-hotsplit" in out, "status must name the server container"
+    assert "API" in out, "status must report API reachability"
+    assert "docker inspect" in Path(log).read_text(), "status must query docker"
+
+
+def test_manage_sh_unknown_command_exits_nonzero(stub_env):
+    env, _ = stub_env
+    r = subprocess.run(["bash", str(MANAGE), "frobnicate"], env=env, capture_output=True, text=True, timeout=30)
+    assert r.returncode != 0
+
+
+def test_manage_sh_exists_in_all_recipes():
+    """Every recipe ships manage.sh so day-to-day commands are the same everywhere."""
+    for slug in ("mimo-v2.6-pro-hotsplit", "deepseek-v4.1-flash-hotsplit",
+                 "glm-5.3-hotsplit", "glm-5.3-flash-hotsplit"):
+        p = BASE / slug / "scripts" / "manage.sh"
+        assert p.is_file() and p.stat().st_size > 0, f"{slug} missing manage.sh"
+        text = p.read_text()
+        assert "status" in text and "rollback" in text and "check" in text

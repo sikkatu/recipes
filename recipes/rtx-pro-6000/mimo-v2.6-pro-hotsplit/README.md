@@ -14,6 +14,7 @@ Target host: 4× RTX PRO 6000 Blackwell Workstation Edition — 96 GB GDDR7 with
 | `scripts/run-tp4-uva.sh` | stock vLLM TP4 + layer-granular UVA offload (the baseline, unchanged) |
 | `scripts/run-tp4-hotsplit.sh` | same server + hotsplit, static or dynamic, NUMA pinning, live counters |
 | `scripts/check-hotsplit-tp4.sh` | reads the container logs and says which stages happened |
+| `scripts/manage.sh` | day-to-day control: status / logs / start / stop / restart / update / rollback / check |
 | `scripts/preflight-tp4.sh` | diagnostics; now also prints GPU → NUMA node |
 | `patches/hotsplit.py` | TP-aware hotsplit with optional dynamic hot set |
 | `patches/hotsplit_plan.py` | numpy-only planning helpers (tested) |

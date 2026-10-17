@@ -18,6 +18,7 @@ CPU — то, что сообщает машина (`lscpu`, `/proc/meminfo`).
 | `scripts/run-tp4-uva.sh` | стоковый vLLM TP4 + UVA-выгрузка на уровне слоёв (базовый, без изменений) |
 | `scripts/run-tp4-hotsplit.sh` | тот же сервер + hotsplit, static или dynamic, NUMA-закрепление, живые счётчики |
 | `scripts/check-hotsplit-tp4.sh` | читает логи контейнера и говорит, какие стадии произошли |
+| `scripts/manage.sh` | повседневное управление: status / logs / start / stop / restart / update / rollback / check |
 | `scripts/preflight-tp4.sh` | диагностика; печатает GPU → NUMA-узел |
 | `patches/hotsplit.py` | TP-осведомлённый hotsplit с опциональным dynamic hot-набором |
 | `patches/hotsplit_plan.py` | планировочные хелперы на numpy (протестированы) |

@@ -17,6 +17,7 @@ CPU 以机器实际报告为准（`lscpu`、`/proc/meminfo`）。
 | `scripts/run-tp4-uva.sh` | 原版 vLLM TP4 + 层级 UVA 卸载（基线，未改动） |
 | `scripts/run-tp4-hotsplit.sh` | 同一服务器 + hotsplit，static 或 dynamic，NUMA 绑定，实时计数 |
 | `scripts/check-hotsplit-tp4.sh` | 读取容器日志，报告哪些阶段已发生 |
+| `scripts/manage.sh` | 日常管理：status / logs / start / stop / restart / update / rollback / check |
 | `scripts/preflight-tp4.sh` | 诊断；打印 GPU → NUMA 节点 |
 | `patches/hotsplit.py` | TP 感知的 hotsplit，可选动态热门集 |
 | `patches/hotsplit_plan.py` | 纯 numpy 规划工具（已测试） |

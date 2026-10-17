@@ -53,6 +53,7 @@ averages; `scripts/balance.sh --counts your.json` prints the exact coverage for 
 | `patches/README.md` | where the runtime enforcement hook comes from, and what is not ported |
 | `scripts/balance.sh` | run the calculator for this model (with or without a histogram) |
 | `scripts/preflight-tp4.sh` | host/GPU/NUMA diagnostics before a first boot |
+| `scripts/manage.sh` | day-to-day control: status / logs / start / stop / restart / update / rollback / check |
 | `scripts/run-tp4-uva.sh` | stock vLLM .28 UVA TP4 + UVA offload baseline (no hot/cold split) |
 | `tp4.env.example` | every knob, with the default |
 

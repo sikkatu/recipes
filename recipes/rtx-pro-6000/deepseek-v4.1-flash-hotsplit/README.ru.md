@@ -12,6 +12,8 @@
 Карты PCIe Gen 5, но слоты хоста — **PCIe 4.0**, линия GPU↔хост ~25 ГБ/с на GPU;
 RAM хоста — DDR4. Без NVLink.
 
+| `scripts/manage.sh` | повседневное управление: status / logs / start / stop / restart / update / rollback / check |
+
 ## Геометрия модели
 | Параметр | Значение |
 |---|---|

@@ -8,6 +8,8 @@
 目标主机：4× RTX PRO 6000（每卡 96 GB GDDR7 带 ECC）。卡是 PCIe Gen 5，
 主机插槽是 **PCIe 4.0**（每 GPU 约 25 GB/s）；内存 DDR4。无 NVLink。
 
+| `scripts/manage.sh` | 日常管理：status / logs / start / stop / restart / update / rollback / check |
+
 ## 几何与均衡
 | 参数 | 值 |
 |---|---|

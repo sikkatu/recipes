@@ -10,6 +10,8 @@
 Целевой хост: 4× RTX PRO 6000 (96 GB GDDR7 с ECC). Карты PCIe Gen 5, слоты хоста —
 **PCIe 4.0** (~25 ГБ/с на GPU); RAM — DDR4. Без NVLink.
 
+| `scripts/manage.sh` | повседневное управление: status / logs / start / stop / restart / update / rollback / check |
+
 ## Геометрия и баланс
 | Параметр | Значение |
 |---|---|

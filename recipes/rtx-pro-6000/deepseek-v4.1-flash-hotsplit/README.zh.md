@@ -11,6 +11,8 @@
 卡是 PCIe Gen 5，但主机插槽是 **PCIe 4.0**，GPU↔主机链路约 25 GB/s；
 主机内存 DDR4。无 NVLink。
 
+| `scripts/manage.sh` | 日常管理：status / logs / start / stop / restart / update / rollback / check |
+
 ## 模型几何
 | 参数 | 值 |
 |---|---|
