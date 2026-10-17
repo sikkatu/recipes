@@ -312,3 +312,29 @@ def test_shard_fp8_qkv_rows_with_torch():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+# ============================================= documented env must reach the container
+def test_documented_env_reaches_container():
+    """Every HOTSPLIT_* knob documented in tp4.env.example must be forwarded by the launcher
+    into the container env. A documented knob that silently does nothing is worse than none:
+    HOTSPLIT_STRICT_HOOK=1 documented but not forwarded promised strict behaviour it did not
+    deliver (found in the wiki audit)."""
+    import re
+    recipe = BASE / "mimo-v2.6-pro-hotsplit"
+    env_doc = (recipe / "tp4.env.example").read_text()
+    launcher = (recipe / "scripts" / "run-tp4-hotsplit.sh").read_text()
+    documented = set(re.findall(r"#?\s*(HOTSPLIT_[A-Z_]+)=", env_doc))
+    assert documented, "tp4.env.example documents no knobs"
+    for knob in sorted(documented):
+        assert knob in launcher, f"{knob} is documented in tp4.env.example but not forwarded by run-tp4-hotsplit.sh"
+
+
+def test_launcher_requires_pinned_image_and_key():
+    """The two launch-time refusals the wiki must document honestly: IMAGE needs a sha256
+    digest, API_KEY is required even on loopback (unless ALLOW_NO_AUTH=1)."""
+    launcher = (BASE / "mimo-v2.6-pro-hotsplit" / "scripts" / "run-tp4-hotsplit.sh").read_text()
+    assert 'IMAGE must be pinned by digest' in launcher
+    assert 'API_KEY is required' in launcher
+    # MODEL_REVISION required when the model is fetched by id
+    assert 'MODEL_REVISION' in launcher
