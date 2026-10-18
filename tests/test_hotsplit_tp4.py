@@ -241,3 +241,105 @@ if __name__ == "__main__":
                 failed += 1
                 print("FAIL", name, repr(e))
     sys.exit(1 if failed else 0)
+
+
+# ---------------------------------------------------------------- commit rollback on injected error
+def test_dynamic_commit_rollback_on_error():
+    """Inject a failure mid-copy and verify the original weights AND both maps are restored
+    (review item 1: the update must be all-or-nothing, not half-applied)."""
+    try:
+        import torch
+    except ImportError:
+        return _skip("torch not installed")
+    os.environ["HOTSPLIT_DEVICE"] = "cpu"
+    os.environ["HOTSPLIT_DYN_LOG"] = "0"
+    os.environ["HOTSPLIT_DYN_MAX_COMMIT_ERRORS"] = "3"
+    import hotsplit as hs
+
+    E, S = 8, 3
+    c13 = torch.arange(E * 4, dtype=torch.float32).reshape(E, 4)
+    c2 = c13 * 10
+    s13 = torch.arange(E, dtype=torch.float32).reshape(E, 1)
+    s2 = s13 * 100
+    hot = [1, 4, 6]
+    h = torch.tensor(hot)
+    dyn = hs._Dyn([5], E)
+    dyn.emap_hot[0, h] = torch.arange(S, dtype=torch.int32)
+    dyn.emap_cold[0, h] = -1
+    dl = hs._DynLayer(5, hot, c13[h].clone(), c2[h].clone(), s13[h].clone(), s2[h].clone(), c13, c2, s13, s2)
+    dyn.layers[5] = dl
+
+    # snapshots of the pre-commit state
+    hw13_before = dl.hw13.clone()
+    hw2_before = dl.hw2.clone()
+    hs13_before = dl.hs13.clone()
+    hs2_before = dl.hs2.clone()
+    emap_hot_before = dyn.emap_hot.clone()
+    emap_cold_before = dyn.emap_cold.clone()
+    hot_list_before = list(dl.hot)
+
+    # inject: the second index_copy_ raises (simulating a CUDA error mid-copy)
+    orig_index_copy = torch.Tensor.index_copy_
+    calls = {"n": 0}
+
+    def flaky(self, dim, index, source):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("injected CUDA error")
+        return orig_index_copy(self, dim, index, source)
+
+    torch.Tensor.index_copy_ = flaky
+    try:
+        dyn.commit([(dl, [(1, 4, 7), (2, 6, 0)])])   # must NOT raise: error is rolled back
+    finally:
+        torch.Tensor.index_copy_ = orig_index_copy
+
+    # everything must be back to the pre-commit state
+    assert torch.equal(dl.hw13, hw13_before), "hw13 not restored after rollback"
+    assert torch.equal(dl.hw2, hw2_before), "hw2 not restored after rollback"
+    assert torch.equal(dl.hs13, hs13_before), "hs13 not restored after rollback"
+    assert torch.equal(dl.hs2, hs2_before), "hs2 not restored after rollback"
+    assert torch.equal(dyn.emap_hot, emap_hot_before), "emap_hot not restored"
+    assert torch.equal(dyn.emap_cold, emap_cold_before), "emap_cold not restored"
+    assert dl.hot == hot_list_before, "dl.hot list must be unchanged after rollback"
+    assert dyn.updates == 0, "a rolled-back commit must not count as an update"
+    assert dyn.commit_errors == 1, "rollback must be counted as a commit error"
+    assert dyn.update_state == "IDLE", f"state should return to IDLE after clean rollback, got {dyn.update_state}"
+
+
+def test_dynamic_commit_fatal_after_repeated_errors():
+    """HOTSPLIT_DYN_MAX_COMMIT_ERRORS consecutive failures must abort the run."""
+    try:
+        import torch
+    except ImportError:
+        return _skip("torch not installed")
+    os.environ["HOTSPLIT_DEVICE"] = "cpu"
+    os.environ["HOTSPLIT_DYN_LOG"] = "0"
+    os.environ["HOTSPLIT_DYN_MAX_COMMIT_ERRORS"] = "2"
+    import hotsplit as hs
+
+    E, S = 8, 3
+    c13 = torch.arange(E * 4, dtype=torch.float32).reshape(E, 4)
+    c2 = c13 * 10
+    s13 = torch.arange(E, dtype=torch.float32).reshape(E, 1)
+    s2 = s13 * 100
+    hot = [1, 4, 6]
+    h = torch.tensor(hot)
+    dyn = hs._Dyn([5], E)
+    dyn.emap_hot[0, h] = torch.arange(S, dtype=torch.int32)
+    dyn.emap_cold[0, h] = -1
+    dl = hs._DynLayer(5, hot, c13[h].clone(), c2[h].clone(), s13[h].clone(), s2[h].clone(), c13, c2, s13, s2)
+    dyn.layers[5] = dl
+
+    orig_index_copy = torch.Tensor.index_copy_
+    torch.Tensor.index_copy_ = lambda self, dim, index, source: (_ for _ in ()).throw(RuntimeError("injected"))
+    try:
+        dyn.commit([(dl, [(1, 4, 7)])])   # error 1: rolled back, no raise
+        try:
+            dyn.commit([(dl, [(1, 4, 7)])])   # error 2 = threshold: must RAISE
+            raised = False
+        except RuntimeError as e:
+            raised = "commit failures" in str(e)
+    finally:
+        torch.Tensor.index_copy_ = orig_index_copy
+    assert raised, "repeated commit failures must abort with a RuntimeError"

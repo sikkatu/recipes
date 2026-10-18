@@ -25,12 +25,22 @@ CONTAINER="${CONTAINER:-mimo-pro-tp4-hotsplit}"
 BASELINE_CONTAINER="${BASELINE_CONTAINER:-mimo-pro-tp4-uva}"
 BASE="${BASE:-http://127.0.0.1:30007}"
 
-# Seed settings from ./tp4.env (values already exported win over the file).
+# Seed settings from ./tp4.env. Values already in the environment WIN over the file:
+# the file is applied only for names that are not already set (parameter expansion).
 if [ -f "$ROOT/tp4.env" ]; then
-  set -a
-  # shellcheck disable=SC1091
-  . "$ROOT/tp4.env"
-  set +a
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|'#'*) continue ;;                 # skip blanks and comments
+    esac
+    name="${line%%=*}"
+    [ "$name" = "$line" ] && continue       # not an assignment
+    name="$(printf '%s' "$name" | tr -d ' ')"
+    [ -z "$name" ] && continue
+    if [ -z "${!name:-}" ]; then            # only fill values not already exported
+      val="${line#*=}"
+      export "$name=$val"
+    fi
+  done < "$ROOT/tp4.env"
 fi
 
 cmd="${1:-}"
@@ -54,11 +64,24 @@ case "$cmd" in
       || echo "  nvidia-smi unavailable"
     echo
     echo "== API ($BASE) =="
-    if curl -fsS -m 5 -o /dev/null "$BASE/v1/models" 2>/dev/null; then
-      echo "  reachable"
-    else
-      echo "  not reachable (server down, still starting, or API_KEY/BASE mismatch)"
+    # send the key when we have one; without a key the request is only valid for
+    # ALLOW_NO_AUTH loopback servers (a protected API answers 401/403 without it)
+    CURL_AUTH=()
+    if [ -n "${API_KEY:-}" ]; then
+      CURL_AUTH=(-H "Authorization: Bearer $API_KEY")
     fi
+    code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "${CURL_AUTH[@]}" "$BASE/v1/models" 2>/dev/null || echo 000)"
+    case "$code" in
+      200) echo "  reachable (authenticated)" ;;
+      401|403)
+        if [ -n "${API_KEY:-}" ]; then
+          echo "  reachable but REJECTED our key (HTTP $code) -- API_KEY mismatch"
+        else
+          echo "  reachable but REQUIRES a key (HTTP $code) -- set API_KEY in this shell or tp4.env"
+        fi ;;
+      000) echo "  not reachable (server down, still starting, or wrong BASE)" ;;
+      *)   echo "  unexpected HTTP $code from $BASE/v1/models" ;;
+    esac
     ;;
   logs)
     need_docker
@@ -101,6 +124,22 @@ case "$cmd" in
   clean-cache)
     # shows the cache size first, then asks before deleting -- never deletes silently
     CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
+    # REFUSE dangerous paths: /, $HOME, or anything that is not inside a cache-like directory.
+    # A mistyped HF_CACHE must not take the whole system (or the whole home) with it.
+    CACHE_REAL="$(readlink -f "$CACHE" 2>/dev/null || printf '%s' "$CACHE")"
+    HOME_REAL="$(readlink -f "$HOME" 2>/dev/null || printf '%s' "$HOME")"
+    case "$CACHE_REAL" in
+      "/"|"$HOME_REAL"|"/home"|"/root"|"/usr"|"/var"|"/etc"|"/opt"|"/tmp"|"/bin"|"/sbin"|"/lib*")
+        echo "REFUSING to delete '$CACHE_REAL': this is a system or home directory, not a cache."
+        echo "Set HF_CACHE to the actual cache directory (e.g. \$HOME/.cache/huggingface)."
+        exit 1 ;;
+      */.cache/*|*/cache/*|*/.cache|huggingface*)
+        : ;;   # looks like a cache directory, proceed
+      *)
+        echo "REFUSING to delete '$CACHE_REAL': path does not look like a cache directory."
+        echo "Expected something under .cache/ or cache/. Use --force via HF_CACHE only if sure."
+        exit 1 ;;
+    esac
     if [ -d "$CACHE" ]; then
       echo "Hugging Face cache: $CACHE"
       du -sh "$CACHE" 2>/dev/null || true

@@ -478,10 +478,13 @@ class _Dyn:
         if use_stream:
             if self.stream is None:
                 self.stream = torch.cuda.Stream(device=dev)
+            # Capture the COMPUTE stream now: we are still on it here, and the event at the
+            # end must be published to THIS stream, not to the swap stream we enter below.
+            compute_stream = torch.cuda.current_stream(device=dev)
             stream = self.stream
-            stream.wait_stream(torch.cuda.current_stream(device=dev))
             swap_ctx = torch.cuda.stream(stream)
         else:
+            compute_stream = None
             stream = None
             swap_ctx = None
         staged = []
@@ -512,6 +515,11 @@ class _Dyn:
                              dl.hs2.index_select(0, slots).clone()))
         old_hv = self.emap_hot[t_hr, t_hc].clone()
         old_cv = self.emap_cold[t_cr, t_cc].clone()
+        # Order the swap stream only NOW: every snapshot above is enqueued on the compute
+        # stream, so stream.wait_stream(compute_stream) makes the copies wait for them.
+        # (Calling it earlier would let a copy start while snapshots are still being made.)
+        if use_stream:
+            stream.wait_stream(compute_stream)
         try:
             self.update_state = "COPYING"
             with (swap_ctx if swap_ctx is not None else _null_ctx()):
@@ -523,7 +531,10 @@ class _Dyn:
                 if use_stream:
                     ev = torch.cuda.Event()
                     ev.record(stream)
-                    torch.cuda.current_stream(device=dev).wait_event(ev)
+            # Publish outside the swap-stream context: compute_stream must wait for the swap
+            # event. Inside the context current_stream() would be the swap stream itself.
+            if use_stream:
+                compute_stream.wait_event(ev)
             # VERIFY: force completion so an async CUDA error surfaces here, while the
             # snapshots are still intact and the maps have NOT been flipped yet.
             self.update_state = "VERIFYING"
@@ -545,7 +556,14 @@ class _Dyn:
                         dl.hs2.index_copy_(0, slots, s2)
                     self.emap_hot[t_hr, t_hc] = old_hv
                     self.emap_cold[t_cr, t_cc] = old_cv
-                    _sync()
+                    if use_stream:
+                        rev = torch.cuda.Event()
+                        rev.record(stream)
+                    else:
+                        rev = None
+                if rev is not None:
+                    compute_stream.wait_event(rev)
+                _sync()
                 self.update_state = "IDLE"
             except Exception as e2:
                 self.update_state = "FAILED"

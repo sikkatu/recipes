@@ -404,3 +404,102 @@ def test_manage_sh_has_clean_cache():
         assert "clean-cache" in t, f"{p}: clean-cache command missing"
         # must ask for confirmation before deleting
         assert "read -r" in t or "confirm" in t, f"{p}: clean-cache must ask before deleting"
+
+
+# ============================================= traffic-weighted phase ratio (item 2)
+def test_traffic_weighted_ratio_is_linear_not_quadratic():
+    """In traffic-weighted mode a phase's influence must be volume x weight (linear), not
+    volume^2 x weight. A 10x-larger decode with decode=1,prefill=0.25 must give 40:1, not 400:1."""
+    import json
+    import tempfile
+    import numpy as np
+    sys.path.insert(0, str(PATCHES))
+    import hotsplit_plan as hp
+    # decode has 10x the observations of prefill
+    hist = {"train": {
+        "decode":  {"0": [100, 0]},
+        "prefill": {"0": [10, 0]},
+    }}
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(hist, f)
+        path = f.name
+    out = hp.load_counts(path, "decode=1,prefill=0.25", mode="traffic-weighted")
+    v = out[0]
+    # decode contribution 100*1 / 110 ; prefill 10*0.25 / 110 -> ratio 40:1
+    ratio = v[0] / v[1] if v[1] != 0 else float("inf")
+    # here both phases route to expert 0 only; compare expert-1 split instead:
+    hist2 = {"train": {
+        "decode":  {"0": [0, 100]},
+        "prefill": {"0": [10, 0]},
+    }}
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(hist2, f)
+        path2 = f.name
+    out2 = hp.load_counts(path2, "decode=1,prefill=0.25", mode="traffic-weighted")
+    w = out2[0]
+    got = w[1] / w[0]   # decode-only expert vs prefill-only expert
+    # expected: (100 * 1) / (10 * 0.25) = 40
+    assert abs(got - 40.0) < 1e-6, f"traffic-weighted ratio is {got}, expected 40 (volume x weight)"
+
+
+def test_phase_balanced_still_equalises_phases():
+    import json, tempfile, sys
+    sys.path.insert(0, str(PATCHES))
+    import hotsplit_plan as hp
+    hist = {"train": {
+        "decode":  {"0": [0, 100]},
+        "prefill": {"0": [10, 0]},
+    }}
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(hist, f)
+        path = f.name
+    out = hp.load_counts(path, "decode=1,prefill=0.25", mode="phase-balanced")
+    w = out[0]
+    # decode normalised to 1 * weight 1, prefill normalised to 1 * weight 0.25 -> 4:1
+    got = w[1] / w[0]
+    assert abs(got - 4.0) < 1e-6, f"phase-balanced ratio is {got}, expected 4"
+
+
+# ============================================= manage.sh / rollback.sh hardening (items 3,4,6,7,8)
+def test_rollback_defaults_live_dir():
+    """rollback.sh runs under set -u and references $LIVE_DIR in its summary -- it must have a
+    default so it cannot crash AFTER removing the container (item 3)."""
+    for p in sorted(BASE.glob("*/scripts/rollback.sh")):
+        t = p.read_text()
+        assert 'LIVE_DIR:-' in t, f"{p}: LIVE_DIR needs a default under set -u"
+
+
+def test_manage_clean_cache_refuses_dangerous_paths():
+    """clean-cache must refuse /, $HOME and non-cache paths (item 4)."""
+    for p in sorted(BASE.glob("*/scripts/manage.sh")):
+        t = p.read_text()
+        assert "REFUSING to delete" in t, f"{p}: clean-cache must refuse dangerous paths"
+        assert "readlink -f" in t, f"{p}: clean-cache must resolve the path before deleting"
+        # must not delete without path sanity checks
+        assert "rm -rf" in t  # still deletes, but only after the guards
+
+
+def test_manage_status_sends_auth_header():
+    """status must send Authorization: Bearer when API_KEY is set (item 6)."""
+    for p in sorted(BASE.glob("*/scripts/manage.sh")):
+        t = p.read_text()
+        assert "Authorization: Bearer" in t, f"{p}: status must send the API key"
+        assert "401" in t and "403" in t, f"{p}: status must explain auth rejections"
+
+
+def test_manage_env_wins_over_file():
+    """Exported environment must override tp4.env; the file only fills unset names (item 7)."""
+    for p in sorted(BASE.glob("*/scripts/manage.sh")):
+        t = p.read_text()
+        assert "only fill values not already exported" in t or "WIN over the file" in t, \
+            f"{p}: env priority contract must be stated"
+        assert 'set -a' not in t, f"{p}: blind 'set -a' sourcing loses env priority"
+
+
+def test_check_script_has_expect_progress_mode():
+    """After confirmed traffic, no dynamic progress must be a FAIL, not a WARN (item 8)."""
+    p = BASE / "mimo-v2.6-pro-hotsplit" / "scripts" / "check-hotsplit-tp4.sh"
+    t = p.read_text()
+    assert "EXPECT_PROGRESS" in t, "expect-progress mode missing"
+    assert "expect-progress" in t
+    assert "fail=1" in t

@@ -16,6 +16,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOTSPLIT_CONTAINER="${HOTSPLIT_CONTAINER:-mimo-pro-tp4-hotsplit}"
 BASELINE_CONTAINER="${BASELINE_CONTAINER:-mimo-pro-tp4-uva}"
 START_BASELINE=0
+LIVE_DIR="${LIVE_DIR:-$PWD/live}"   # default under set -u: the summary must not crash after removal
 [ "${1:-}" = "--start-baseline" ] && START_BASELINE=1
 command -v docker >/dev/null || die "Docker is missing."
 docker info >/dev/null 2>&1 || die "Docker daemon unavailable or permission denied."

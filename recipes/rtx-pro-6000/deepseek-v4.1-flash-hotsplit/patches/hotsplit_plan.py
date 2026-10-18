@@ -96,16 +96,17 @@ def load_counts(path: str, weights_env: str = "", mode: str = "") -> dict[int, n
             raw_sums[phase] = max(total, 1e-12)
         for phase, layers in phases.items():
             w = weights.get(phase, 1.0)
-            if mode == "traffic-weighted":
-                # contribution proportional to this phase's share of total observations
-                w = w * (raw_sums[phase] / sum(raw_sums.values()))
             for li, c in layers.items():
                 arr = np.asarray(c, dtype=np.float64)
                 experts = arr.shape[0] if arr.ndim == 1 else 0
                 arr = _validate_counts(arr, int(li), experts, path)
                 if mode == "phase-balanced":
                     t = arr / max(float(arr.sum()), 1.0) * w
-                else:  # traffic-weighted: keep raw magnitudes scaled by relative volume
+                else:
+                    # traffic-weighted: contribution is proportional to the phase's raw volume
+                    # times its weight -- divide by the total ONCE. (The old code also multiplied
+                    # w by raw_sums[phase]/total here, which squared the volume influence:
+                    # a phase 10x larger with weight 0.25 contributed 400:1 instead of 40:1.)
                     t = arr / sum(raw_sums.values()) * w
                 out[int(li)] = out[int(li)] + t if int(li) in out else t
     else:

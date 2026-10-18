@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Reads the container logs and reports which hotsplit stages actually happened.
-# usage: check-hotsplit-tp4.sh [container] [MODE: dynamic|static]   (default: mimo-pro-tp4-hotsplit, dynamic)
+# usage: check-hotsplit-tp4.sh [container] [MODE: dynamic|static] [expect-progress]
+#        (defaults: mimo-pro-tp4-hotsplit, dynamic; expect-progress = traffic already ran)
 #
 # Diagnostic only — it does not prove that the dynamic counter INCREASED during generation.
 # For that, generate text while this script watches, then re-run it: the "dynamic update"
@@ -14,6 +15,11 @@ C="${1:-mimo-pro-tp4-hotsplit}"
 # MODE: dynamic (default) or static. The check is mode-aware: in dynamic mode a missing or
 # inactive hook on any rank is a FAIL (exit 1), not just a note.
 MODE="${2:-dynamic}"
+# EXPECT_PROGRESS=1 (or 3rd arg "expect-progress"): the caller asserts real traffic already ran,
+# so a dynamic run with zero committed swaps is a FAIL, not a WARN. Without it the verdict is
+# WARN when it is simply too early to tell (no traffic seen yet).
+EXPECT_PROGRESS="${EXPECT_PROGRESS:-0}"
+[ "${3:-}" = "expect-progress" ] && EXPECT_PROGRESS=1
 L="$(docker logs "$C" 2>&1)" || { echo "cannot read logs of $C" >&2; exit 2; }
 fail=0
 chk(){ # label, regex, expected count (default >=1)
@@ -122,9 +128,16 @@ if [ "$MODE" = "dynamic" ]; then
     if [ "${plans_seen:-0}" -ge 2 ]; then
       # planner ran several times but never committed a swap: either the workload matches the
       # offline plan exactly (unlikely after several windows) or the swap path is dead
-      echo "WARN  dynamic mode: planner ran ${plans_seen}x but 0 swaps committed."
-      echo "      If you have already sent real traffic this is a problem; before any generation"
-      echo "      it is simply too early to tell. Re-run after traffic to convert this to FAIL."
+      if [ "$EXPECT_PROGRESS" = "1" ]; then
+        echo "FAIL  dynamic mode: planner ran ${plans_seen}x but 0 swaps committed, and the caller"
+        echo "      asserts real traffic already ran (expect-progress). Dynamic adaptation is not working."
+        fail=1
+      else
+        echo "WARN  dynamic mode: planner ran ${plans_seen}x but 0 swaps committed."
+        echo "      If you have already sent real traffic this is a problem; before any generation"
+        echo "      it is simply too early to tell. Re-run with 'expect-progress' (or EXPECT_PROGRESS=1)"
+        echo "      after traffic to turn this into a FAIL."
+      fi
     else
       echo "WARN  dynamic mode: only ${plans_seen:-0} planning passes seen -- too early to judge."
       echo "      Generate some text and re-run this script for a verdict."
