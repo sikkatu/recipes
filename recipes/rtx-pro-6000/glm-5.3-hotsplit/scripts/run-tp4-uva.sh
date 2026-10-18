@@ -57,15 +57,14 @@ esac
 MODEL_REVISION="${MODEL_REVISION:-}"
 if [ -n "${MODEL_DIR:-}" ]; then
   : # local checkpoint dir: the revision is whatever is on disk; record it yourself
-elif ! printf '%s' "$MODEL_REVISION" | grep -Eq '^[0-9a-f]{40}$'; then
-  die "MODEL_REVISION must be a full 40-hex commit SHA (got '${MODEL_REVISION:-<empty>}').
-Branch names like 'main' are NOT reproducible -- the model is fetched by id here.
-Get the SHA with:
-  curl -fsSL https://huggingface.co/api/models/<MODEL_ID> | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])'
-Or download to a local dir and set MODEL_DIR (no revision needed)."
 elif [ -z "$MODEL_REVISION" ]; then
   die "MODEL_REVISION is required when the model is fetched by ID (trust-remote-code runs whatever is
 on the ref). Pin the checkpoint commit SHA, or use MODEL_DIR with a local copy you vetted."
+elif ! printf '%s' "$MODEL_REVISION" | grep -Eq '^[0-9a-f]{40}$'; then
+  die "MODEL_REVISION must be a full 40-hex commit SHA (got '$MODEL_REVISION').
+Branch names like 'main' are NOT reproducible -- the model is fetched by id here.
+Get the SHA with:
+  curl -fsSL https://huggingface.co/api/models/<MODEL_ID> | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"sha\"])'"
 fi
 
 MODEL_ID="${MODEL_ID:-incoai/GLM-5.3-NVFP4}"

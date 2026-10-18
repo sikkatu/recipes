@@ -192,12 +192,12 @@ def test_remote_fetch_adds_revision_exactly_once(lp, stub_env):
     env2 = env.copy()
     env2.pop("MODEL_DIR", None)
     r = run_launcher(lp, env2, {"API_KEY": "secret", "IMAGE": "x@sha256:" + "a" * 64,
-                                "MODEL_ID": "org/model", "MODEL_REVISION": "abc123",
+                                "MODEL_ID": "org/model", "MODEL_REVISION": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                                 "ALLOW_RUN": "1"})
     run_lines = run_lines_of(log)
     assert len(run_lines) == 1
     assert run_lines[0].count("--revision") == 1, "exactly one --revision expected"
-    assert "abc123" in run_lines[0]
+    assert "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" in run_lines[0]
 
 
 @pytest.mark.parametrize("lp", LAUNCHERS)
