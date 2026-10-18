@@ -11,6 +11,7 @@
 #   restart     stop + start (picks up current env and tp4.env if present)
 #   update      git pull, then restart with the updated tree
 #   rollback    delegate to scripts/rollback.sh (stop hotsplit, optional baseline)
+#   clean-cache show the HF cache size, then delete it only after explicit confirmation
 #   check       run the hotsplit verification (static/dynamic from HOTSPLIT_DYNAMIC)
 #
 # Settings come from the environment, optionally seeded from ./tp4.env if it exists
@@ -96,6 +97,25 @@ case "$cmd" in
   rollback)
     need_docker
     exec bash "$HERE/rollback.sh" "${2:-}"
+    ;;
+  clean-cache)
+    # shows the cache size first, then asks before deleting -- never deletes silently
+    CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
+    if [ -d "$CACHE" ]; then
+      echo "Hugging Face cache: $CACHE"
+      du -sh "$CACHE" 2>/dev/null || true
+    else
+      echo "No cache directory at $CACHE"
+      exit 0
+    fi
+    printf "Delete the model cache at %s? Type 'yes' to confirm: " "$CACHE"
+    read -r answer
+    if [ "$answer" = "yes" ]; then
+      rm -rf "$CACHE"
+      echo "Cache removed. Next start will re-download model files."
+    else
+      echo "Aborted; cache untouched."
+    fi
     ;;
   check)
     need_docker

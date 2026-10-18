@@ -409,6 +409,13 @@ class _Dyn:
         self.steps = 0
         self.updates = 0
         self.stream = None  # dedicated CUDA stream for weight swaps (P0-2)
+        # commit transaction state (P1): an update either fully lands or is rolled back;
+        # after commit_errors >= max_commit_errors the run aborts instead of serving
+        # from a bank that may be half-swapped.
+        self.update_state = "IDLE"
+        self.commit_errors = 0
+        self.max_commit_errors = _dyn_int("HOTSPLIT_DYN_MAX_COMMIT_ERRORS", "3", lo=1)
+        self.last_update_at = None
         self.prev: np.ndarray | None = None
         self.crow: dict[int, int] = {}
         self.score: dict[int, np.ndarray] = {}
@@ -491,25 +498,80 @@ class _Dyn:
         t_cr = torch.tensor(cr, dtype=torch.long, device=dev)
         t_cc = torch.tensor(cc, dtype=torch.long, device=dev)
         t_cv = torch.tensor(cv, dtype=torch.int32, device=dev)
-        # ---- point of no return ----
-        with (swap_ctx if swap_ctx is not None else _null_ctx()):
-            for dl, slots, new in staged:
-                dl.hw13.index_copy_(0, slots, dl.c13.index_select(0, new))
-                dl.hw2.index_copy_(0, slots, dl.c2.index_select(0, new))
-                dl.hs13.index_copy_(0, slots, dl.s13.index_select(0, new))
-                dl.hs2.index_copy_(0, slots, dl.s2.index_select(0, new))
+        # ---- transactional update (P1) ----
+        # Snapshot everything that will be overwritten BEFORE the first write: the affected
+        # weight rows and the current map entries. If any CUDA op raises, or a post-copy sync
+        # surfaces an async error, the snapshots are written back and the update is aborted.
+        self.update_state = "SNAPSHOT"
+        old_rows = []  # (dl, slots, hw13_rows, hw2_rows, hs13_rows, hs2_rows)
+        for dl, slots, new in staged:
+            old_rows.append((dl, slots,
+                             dl.hw13.index_select(0, slots).clone(),
+                             dl.hw2.index_select(0, slots).clone(),
+                             dl.hs13.index_select(0, slots).clone(),
+                             dl.hs2.index_select(0, slots).clone()))
+        old_hv = self.emap_hot[t_hr, t_hc].clone()
+        old_cv = self.emap_cold[t_cr, t_cc].clone()
+        try:
+            self.update_state = "COPYING"
+            with (swap_ctx if swap_ctx is not None else _null_ctx()):
+                for dl, slots, new in staged:
+                    dl.hw13.index_copy_(0, slots, dl.c13.index_select(0, new))
+                    dl.hw2.index_copy_(0, slots, dl.c2.index_select(0, new))
+                    dl.hs13.index_copy_(0, slots, dl.s13.index_select(0, new))
+                    dl.hs2.index_copy_(0, slots, dl.s2.index_select(0, new))
+                if use_stream:
+                    ev = torch.cuda.Event()
+                    ev.record(stream)
+                    torch.cuda.current_stream(device=dev).wait_event(ev)
+            # VERIFY: force completion so an async CUDA error surfaces here, while the
+            # snapshots are still intact and the maps have NOT been flipped yet.
+            self.update_state = "VERIFYING"
+            _sync()
+            self.update_state = "MAPS"
             self.emap_hot[t_hr, t_hc] = t_hv
             self.emap_cold[t_cr, t_cc] = t_cv
-            if use_stream:
-                ev = torch.cuda.Event()
-                ev.record(stream)
-                torch.cuda.current_stream(device=dev).wait_event(ev)
+            _sync()
+        except Exception as e:
+            # best-effort rollback: restore the snapshotted rows and map entries, then either
+            # abort the run (repeat offender) or skip this update loudly.
+            self.update_state = "ROLLBACK"
+            try:
+                with (swap_ctx if swap_ctx is not None else _null_ctx()):
+                    for dl, slots, w13, w2, s13, s2 in old_rows:
+                        dl.hw13.index_copy_(0, slots, w13)
+                        dl.hw2.index_copy_(0, slots, w2)
+                        dl.hs13.index_copy_(0, slots, s13)
+                        dl.hs2.index_copy_(0, slots, s2)
+                    self.emap_hot[t_hr, t_hc] = old_hv
+                    self.emap_cold[t_cr, t_cc] = old_cv
+                    _sync()
+                self.update_state = "IDLE"
+            except Exception as e2:
+                self.update_state = "FAILED"
+                logger.error("hotsplit dynamic: rollback ALSO failed (%r); bank state is "
+                             "uncertain -- aborting before serving corrupted weights", e2)
+                raise RuntimeError(
+                    f"hotsplit dynamic: commit failed ({e!r}) and rollback failed ({e2!r}); "
+                    f"refusing to serve from an uncertain hot bank") from e
+            self.commit_errors += 1
+            logger.error("hotsplit dynamic: commit failed (%r), rolled back cleanly; "
+                         "commit error %d of %d before abort",
+                         e, self.commit_errors, self.max_commit_errors)
+            if self.commit_errors >= self.max_commit_errors:
+                raise RuntimeError(
+                    f"hotsplit dynamic: {self.commit_errors} commit failures in a row; "
+                    f"refusing to keep swapping on this hardware") from e
+            return  # skip this update; maps and dl.hot are unchanged
+        self.update_state = "COMMITTED"
+        self.commit_errors = 0  # a clean commit resets the consecutive-error count
         n = 0
         for dl, sw in plans:
             for slot, _, e_in in sw:
                 dl.hot[slot] = e_in
                 n += 1
         self.updates += 1
+        self.last_update_at = time.time()
         if self.log_updates:
             _sync()
             logger.info("hotsplit dynamic update #%d at step %d: %d swaps in %d layers, %.0f ms",

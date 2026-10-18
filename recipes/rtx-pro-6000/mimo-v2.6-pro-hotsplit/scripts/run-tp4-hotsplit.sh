@@ -12,16 +12,27 @@ API_KEY="${API_KEY:-}"
 ALLOW_NO_AUTH="${ALLOW_NO_AUTH:-0}"
 # Order matters: a non-loopback bind ALWAYS requires a key, even with ALLOW_NO_AUTH=1.
 # ALLOW_NO_AUTH=1 only permits an unauthenticated loopback listener (closed debug loop).
-if [ "$BIND" != "127.0.0.1" ] && [ -z "$API_KEY" ]; then
+# Loopback is strictly 127.0.0.1 or ::1 (optionally bracketed). Everything else -- including
+# `localhost` (resolves via getaddrinfo, we cannot reason about the result), wildcard binds
+# (0.0.0.0, ::, *), other IPv6 and any malformed or empty value -- is treated as NON-loopback
+# and needs an API key. Fail-safe: an unrecognized address never gets the no-auth bypass.
+LOOPBACK=0
+case "$BIND" in
+  127.0.0.1|\[::1\]|::1) LOOPBACK=1 ;;
+esac
+if [ -z "$BIND" ]; then
+  die "BIND is empty. Use a literal IP: 127.0.0.1 (loopback), ::1 (IPv6 loopback) or a routable address."
+fi
+if [ "$LOOPBACK" = "0" ] && [ -z "$API_KEY" ]; then
   die "refusing a non-loopback bind ($BIND) without an API key -- that is a public unauthenticated API.
 A key is mandatory for any non-loopback bind even when ALLOW_NO_AUTH=1."
 fi
 if [ -z "$API_KEY" ]; then
-  if [ "$ALLOW_NO_AUTH" = "1" ] && [ "$BIND" = "127.0.0.1" ]; then
+  if [ "$ALLOW_NO_AUTH" = "1" ] && [ "$LOOPBACK" = "1" ]; then
     echo "WARNING: running WITHOUT auth on loopback only (ALLOW_NO_AUTH=1) -- closed debug loop."
   else
     die "API_KEY is required (the API has no auth otherwise). Export a key (e.g. API_KEY=\$(openssl rand -hex 24)).
-ALLOW_NO_AUTH=1 is accepted ONLY together with BIND=127.0.0.1 (loopback debug)."
+ALLOW_NO_AUTH=1 is accepted ONLY together with a proven loopback bind (127.0.0.1 or ::1)."
   fi
 fi
 
@@ -88,6 +99,16 @@ mkdir -p "$HF_CACHE" "$LIVE_DIR"
 byte-identical to the reviewed set; regenerate the manifest only after a deliberate change:
   ( cd patches && sha256sum mimo_v2_hotsplit.py mimo_v2_omni.py hotsplit.py hotsplit_plan.py numa_bind.py sitecustomize.py expert_hist_mix.json > MANIFEST.sha256 )"
 echo "patch manifest verified against patches/MANIFEST.sha256"
+# TRUST BOUNDARY (read this before the first run):
+#   1. The manifest protects against accidental edits and casual tampering -- the manifest lives
+#      in the same tree as the patches. A hostile actor with write access to the repo can replace
+#      both. Pin the git revision you reviewed (git rev-parse HEAD) and diff against it.
+#   2. --trust-remote-code lets the model run its own Python (modeling code). Pinning
+#      MODEL_REVISION prevents silent changes on later fetches, but it does NOT make the code
+#      itself safe. Review the model's remote code before the first run, and run the container
+#      with no extra host mounts or secrets beyond what this launcher already sets up.
+#   3. The API key is passed as VLLM_API_KEY in the container env. Anyone who can run
+#      'docker inspect' on this host can read it. Keep docker access root-equivalent.
 
 for f in "$RECIPE/patches/hotsplit.py" "$RECIPE/patches/hotsplit_plan.py" "$RECIPE/patches/numa_bind.py" \
          "$RECIPE/patches/sitecustomize.py" "$RECIPE/patches/expert_hist_mix.json" \
@@ -189,7 +210,7 @@ ENVS=(
 for v in HOTSPLIT_DYN_STEPS HOTSPLIT_DYN_MAX_SWAPS HOTSPLIT_DYN_DECAY HOTSPLIT_DYN_MARGIN \
          HOTSPLIT_DYN_PRIOR_TOKENS HOTSPLIT_DYN_LOG HOTSPLIT_TOPK HOTSPLIT_LIVE_DECODE_MAX \
          HOTSPLIT_DYN_MAX_PLAN_ERRORS HOTSPLIT_STRICT_HOOK HOTSPLIT_VRAM_RESERVE_GIB \
-         HOTSPLIT_MAX_TOKENS HOTSPLIT_NUMA_STRICT; do
+         HOTSPLIT_MAX_TOKENS HOTSPLIT_NUMA_STRICT HOTSPLIT_DYN_MAX_COMMIT_ERRORS; do
   [ -n "${!v:-}" ] && ENVS+=(-e "$v=${!v}")
 done
 

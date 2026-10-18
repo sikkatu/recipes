@@ -24,16 +24,27 @@ API_KEY="${API_KEY:-}"
 ALLOW_NO_AUTH="${ALLOW_NO_AUTH:-0}"
 # Order matters: a non-loopback bind ALWAYS requires a key, even with ALLOW_NO_AUTH=1.
 # ALLOW_NO_AUTH=1 only permits an unauthenticated loopback listener (closed debug loop).
-if [ "$BIND" != "127.0.0.1" ] && [ -z "$API_KEY" ]; then
+# Loopback is strictly 127.0.0.1 or ::1 (optionally bracketed). Everything else -- including
+# `localhost` (resolves via getaddrinfo, we cannot reason about the result), wildcard binds
+# (0.0.0.0, ::, *), other IPv6 and any malformed or empty value -- is treated as NON-loopback
+# and needs an API key. Fail-safe: an unrecognized address never gets the no-auth bypass.
+if [ -z "$BIND" ]; then
+  die "BIND is empty. Use a literal IP: 127.0.0.1 (loopback), ::1 (IPv6 loopback) or a routable address."
+fi
+LOOPBACK=0
+case "$BIND" in
+  127.0.0.1|\[::1\]|::1) LOOPBACK=1 ;;
+esac
+if [ "$LOOPBACK" = "0" ] && [ -z "$API_KEY" ]; then
   die "refusing a non-loopback bind ($BIND) without an API key -- that is a public unauthenticated API.
 A key is mandatory for any non-loopback bind even when ALLOW_NO_AUTH=1."
 fi
 if [ -z "$API_KEY" ]; then
-  if [ "$ALLOW_NO_AUTH" = "1" ] && [ "$BIND" = "127.0.0.1" ]; then
+  if [ "$ALLOW_NO_AUTH" = "1" ] && [ "$LOOPBACK" = "1" ]; then
     echo "WARNING: running WITHOUT auth on loopback only (ALLOW_NO_AUTH=1) -- closed debug loop."
   else
     die "API_KEY is required (the API has no auth otherwise). Export a key (e.g. API_KEY=\$(openssl rand -hex 24)).
-ALLOW_NO_AUTH=1 is accepted ONLY together with BIND=127.0.0.1 (loopback debug)."
+ALLOW_NO_AUTH=1 is accepted ONLY together with a proven loopback bind (127.0.0.1 or ::1)."
   fi
 fi
 

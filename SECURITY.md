@@ -15,3 +15,14 @@ Recipes contain no credentials by contract (CI rejects credential-shaped strings
   docker `-p` a no-op; the launchers do not pretend otherwise).
 - Secrets are never echoed to launcher output; they appear only inside the container env.
 
+## Threat model
+- **Container env is inspectable.** `VLLM_API_KEY` is passed via `docker run -e`; anyone who can
+  run `docker inspect` on the host can read it. Docker access is root-equivalent -- restrict who
+  has it. For multi-user or networked deployments, put an authentication proxy in front and keep
+  the key out of the container env.
+- **`--trust-remote-code`** runs the model's own Python. A pinned `MODEL_REVISION` prevents silent
+  changes on re-fetch but does not make the code safe. Review the model's remote code before the
+  first run; run the container with no extra host mounts or secrets.
+- **The patch manifest** (`patches/MANIFEST.sha256`) catches casual tampering but lives next to the
+  patches -- pin and diff the reviewed git revision for a stronger guarantee.
+

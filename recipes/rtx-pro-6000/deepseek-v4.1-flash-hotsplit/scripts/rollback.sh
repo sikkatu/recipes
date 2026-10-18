@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Rollback: stop and remove the hotsplit container, then optionally start the plain UVA baseline.
-# Nothing outside the container is ever modified by the launchers, so rollback is container-level.
+# HONEST SCOPE: the launchers write OUTSIDE the container too, and rollback does NOT undo it:
+#   - the Hugging Face cache (HF_CACHE, default ~/.cache/huggingface) keeps model weights;
+#   - LIVE_DIR (default ./live) keeps routing counters and snapshots.
+# Rollback removes the server container only. Model cache and counters are preserved on purpose;
+# use manage.sh clean-cache to drop the cache after a size preview and explicit confirmation.
 # usage: rollback.sh [--start-baseline]
 set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
@@ -29,4 +33,4 @@ if [ "$START_BASELINE" = "1" ]; then
 else
   echo "Next step (optional): bash $HERE/run-tp4-uva.sh   # stock UVA baseline"
 fi
-echo "Rollback done. No host state was modified by hotsplit."
+echo "Rollback done. Container removed. NOT touched (preserved on purpose): the Hugging Face model cache and $LIVE_DIR counters -- see manage.sh clean-cache."

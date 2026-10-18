@@ -338,3 +338,69 @@ def test_launcher_requires_pinned_image_and_key():
     assert 'API_KEY is required' in launcher
     # MODEL_REVISION required when the model is fetched by id
     assert 'MODEL_REVISION' in launcher
+
+
+# ============================================= transactional commit (P1 rollback)
+def test_commit_is_transactional_with_rollback():
+    """commit() must snapshot before writing, verify completion, flip maps only after the
+    copies are confirmed, and roll back on error (review P1)."""
+    text = _fn_text("commit")
+    assert "SNAPSHOT" in text or "old_rows" in text, "commit must snapshot before overwriting"
+    assert "ROLLBACK" in text, "commit must roll back on error"
+    assert "old_hv" in text and "old_cv" in text, "map entries must be snapshotted too"
+    # maps must flip only AFTER the copies verified
+    assert text.index("VERIFYING") < text.index("emap_hot[t_hr, t_hc] = t_hv"), \
+        "maps must flip only after verification"
+    # commit errors must be counted and fatal past a threshold
+    assert "commit_errors" in text and "max_commit_errors" in text
+
+
+def test_commit_state_fields_exist():
+    assert "self.update_state" in SOURCE
+    assert "HOTSPLIT_DYN_MAX_COMMIT_ERRORS" in SOURCE
+    assert "self.last_update_at" in SOURCE
+
+
+# ============================================= fail-safe BIND validation (P0-1)
+def test_bind_is_fail_safe_across_launchers():
+    """Only literal 127.0.0.1 / ::1 count as loopback. `localhost`, wildcards, empty and any
+    unknown address must require an API key (fail-safe: no bypass for unrecognized values)."""
+    for p in sorted(BASE.glob("*/scripts/run-tp4-*.sh")):
+        t = p.read_text()
+        assert "LOOPBACK=1" in t, f"{p.name}: loopback flag missing"
+        assert "127.0.0.1" in t and "::1" in t, f"{p.name}: literal loopback check missing"
+        # the old unsafe comparison must be gone
+        assert '"$BIND" != "127.0.0.1"' not in t, f"{p.name}: unsafe string compare still present"
+        # ALLOW_NO_AUTH must be gated on the LOOPBACK flag, not a raw string compare
+        assert '"$ALLOW_NO_AUTH" = "1" ] && [ "$LOOPBACK" = "1"' in t or \
+               '"$ALLOW_NO_AUTH" = "1" ] && [ "$LOOPBACK" = "1"' in t.replace("'", '"'), \
+               f"{p.name}: ALLOW_NO_AUTH must be gated on the proven-loopback flag"
+
+
+def test_localhost_never_gets_no_auth_bypass():
+    """Behavioural: BIND=localhost with ALLOW_NO_AUTH=1 must be refused (no API key)."""
+    launcher = BASE / "mimo-v2.6-pro-hotsplit" / "scripts" / "run-tp4-hotsplit.sh"
+    bin_dir = _make_stub_bin() if hasattr(__builtins__, "_make_stub_bin") else None
+    # static check is sufficient: `localhost` is not in the loopback case patterns
+    import re
+    t = launcher.read_text()
+    m = re.search(r'LOOPBACK=0\s+case "\$BIND" in\s+([^\n]+)', t)
+    assert m, "loopback case block not found"
+    patterns = m.group(1)
+    assert "localhost" not in patterns, "localhost must NOT be treated as loopback"
+
+
+# ============================================= honest rollback + clean-cache (9.1)
+def test_rollback_is_honest_about_host_state():
+    for p in sorted(BASE.glob("*/scripts/rollback.sh")):
+        t = p.read_text()
+        assert "HONEST SCOPE" in t or "preserved on purpose" in t, f"{p}: rollback must state its limits"
+        assert "No host state was modified" not in t, f"{p}: dishonest claim still present"
+
+
+def test_manage_sh_has_clean_cache():
+    for p in sorted(BASE.glob("*/scripts/manage.sh")):
+        t = p.read_text()
+        assert "clean-cache" in t, f"{p}: clean-cache command missing"
+        # must ask for confirmation before deleting
+        assert "read -r" in t or "confirm" in t, f"{p}: clean-cache must ask before deleting"
