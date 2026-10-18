@@ -503,3 +503,32 @@ def test_check_script_has_expect_progress_mode():
     assert "EXPECT_PROGRESS" in t, "expect-progress mode missing"
     assert "expect-progress" in t
     assert "fail=1" in t
+
+
+# ============================================= strict pinning validation (P1a/P1b/P1c)
+def test_model_revision_must_be_full_sha():
+    """A branch name like 'main' must NOT pass as MODEL_REVISION (P1a)."""
+    for p in sorted(BASE.glob("*/scripts/run-tp4-*.sh")):
+        t = p.read_text()
+        assert '^[0-9a-f]{40}$' in t, f"{p}: MODEL_REVISION must be checked against a 40-hex SHA"
+        assert "full 40-hex commit SHA" in t, f"{p}: the error message must state the requirement"
+
+
+def test_image_digest_must_be_64_hex():
+    """@sha256:<junk> must NOT pass as a pinned IMAGE (P1b)."""
+    for p in sorted(BASE.glob("*/scripts/run-tp4-*.sh")):
+        t = p.read_text()
+        assert '@sha256:[0-9a-f]{64}$' in t or "@sha256:[0-9a-f]{64}" in t, \
+            f"{p}: IMAGE digest must be exactly 64 hex chars"
+
+
+def test_clean_cache_only_huggingface_dir():
+    """clean-cache must refuse ~/.cache and any non-huggingface path (P1c)."""
+    for p in sorted(BASE.glob("*/scripts/manage.sh")):
+        t = p.read_text()
+        assert "is not a huggingface cache directory" in t, \
+            f"{p}: clean-cache must require the huggingface dir specifically"
+        # the permissive old patterns must be gone
+        assert '*/.cache/*|*/cache/*|*/.cache' not in t, \
+            f"{p}: permissive cache patterns still present"
+        assert '*/huggingface' in t, f"{p}: huggingface path pattern missing"

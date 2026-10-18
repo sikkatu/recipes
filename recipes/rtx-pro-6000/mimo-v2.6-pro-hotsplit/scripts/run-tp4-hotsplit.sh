@@ -40,7 +40,14 @@ fi
 # The model patches below are built against a specific vLLM image, so the image MUST be pinned.
 IMAGE="${IMAGE:-}"
 case "$IMAGE" in
-  *@sha256:*) ;;
+  *@sha256:*)
+    # the digest must be exactly 64 hex chars; a malformed one silently resolves to a
+    # different image or fails later in a confusing way
+    if ! printf '%s' "$IMAGE" | grep -Eq '@sha256:[0-9a-f]{64}$'; then
+      die "IMAGE digest is malformed: '$IMAGE'
+Expected @sha256:<exactly 64 hex chars>. Get the real digest with:
+  docker buildx imagetools inspect <repo>:<tag> | grep Digest"
+    fi ;;
   *) die "IMAGE must be pinned by digest (@sha256:...), got: '${IMAGE:-<empty>}'. Floating tags are not
 reproducible and the mounted model patches only match one vLLM build. Get the digest first:
   docker buildx imagetools inspect <repo>:<tag> | grep Digest
@@ -51,6 +58,12 @@ esac
 MODEL_REVISION="${MODEL_REVISION:-}"
 if [ -n "${MODEL_DIR:-}" ]; then
   : # local checkpoint dir: the revision is whatever is on disk; record it yourself
+elif ! printf '%s' "$MODEL_REVISION" | grep -Eq '^[0-9a-f]{40}$'; then
+  die "MODEL_REVISION must be a full 40-hex commit SHA (got '${MODEL_REVISION:-<empty>}').
+Branch names like 'main' are NOT reproducible -- the model is fetched by id here.
+Get the SHA with:
+  curl -fsSL https://huggingface.co/api/models/<MODEL_ID> | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])'
+Or download to a local dir and set MODEL_DIR (no revision needed)."
 elif [ -z "$MODEL_REVISION" ]; then
   die "MODEL_REVISION is required when the model is fetched by ID (trust-remote-code runs whatever is
 on the ref). Pin the checkpoint commit SHA, or use MODEL_DIR with a local copy you vetted."

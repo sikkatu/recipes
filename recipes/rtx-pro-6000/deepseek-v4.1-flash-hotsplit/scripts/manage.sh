@@ -124,20 +124,18 @@ case "$cmd" in
   clean-cache)
     # shows the cache size first, then asks before deleting -- never deletes silently
     CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
-    # REFUSE dangerous paths: /, $HOME, or anything that is not inside a cache-like directory.
-    # A mistyped HF_CACHE must not take the whole system (or the whole home) with it.
+    # REFUSE anything that is not the huggingface cache dir specifically. A mistyped HF_CACHE
+    # (e.g. $HOME/.cache) must not take unrelated caches or the whole home with it.
     CACHE_REAL="$(readlink -f "$CACHE" 2>/dev/null || printf '%s' "$CACHE")"
     HOME_REAL="$(readlink -f "$HOME" 2>/dev/null || printf '%s' "$HOME")"
     case "$CACHE_REAL" in
-      "/"|"$HOME_REAL"|"/home"|"/root"|"/usr"|"/var"|"/etc"|"/opt"|"/tmp"|"/bin"|"/sbin"|"/lib*")
-        echo "REFUSING to delete '$CACHE_REAL': this is a system or home directory, not a cache."
-        echo "Set HF_CACHE to the actual cache directory (e.g. \$HOME/.cache/huggingface)."
-        exit 1 ;;
-      */.cache/*|*/cache/*|*/.cache|huggingface*)
-        : ;;   # looks like a cache directory, proceed
+      "$HOME_REAL/.cache/huggingface"|"${HF_HOME:-/nonexistent}"|*/huggingface|*/huggingface/hub|*/huggingface/*)
+        : ;;   # this is the huggingface cache directory -- allowed
       *)
-        echo "REFUSING to delete '$CACHE_REAL': path does not look like a cache directory."
-        echo "Expected something under .cache/ or cache/. Use --force via HF_CACHE only if sure."
+        echo "REFUSING to delete '$CACHE_REAL': this is not a huggingface cache directory."
+        echo "clean-cache only deletes the Hugging Face model cache (default \$HOME/.cache/huggingface)."
+        echo "To wipe something else, do it manually -- this guard exists so a typo cannot"
+        echo "remove ~/.cache, the home directory or anything unrelated."
         exit 1 ;;
     esac
     if [ -d "$CACHE" ]; then
