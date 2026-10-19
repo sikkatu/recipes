@@ -137,9 +137,14 @@ case "$cmd" in
     # (e.g. $HOME/.cache) must not take unrelated caches or the whole home with it.
     CACHE_REAL="$(readlink -f "$CACHE" 2>/dev/null || printf '%s' "$CACHE")"
     HOME_REAL="$(readlink -f "$HOME" 2>/dev/null || printf '%s' "$HOME")"
+    # STRICT allow-list: only the canonical HF cache root and its hub/ subdir. Arbitrary
+    # paths that merely contain "huggingface" in their name are NOT accepted (review P2a):
+    # /tmp/huggingface/important-data must be refused.
+    HF_ROOT="${HF_HOME:-$HOME_REAL/.cache/huggingface}"
+    HF_ROOT_REAL="$(readlink -f "$HF_ROOT" 2>/dev/null || printf '%s' "$HF_ROOT")"
     case "$CACHE_REAL" in
-      "$HOME_REAL/.cache/huggingface"|"${HF_HOME:-/nonexistent}"|*/huggingface|*/huggingface/hub|*/huggingface/*)
-        : ;;   # this is the huggingface cache directory -- allowed
+      "$HF_ROOT_REAL"|"$HF_ROOT_REAL/hub")
+        : ;;   # the HF cache root or its hub/ subdir -- allowed
       *)
         echo "REFUSING to delete '$CACHE_REAL': this is not a huggingface cache directory."
         echo "clean-cache only deletes the Hugging Face model cache (default \$HOME/.cache/huggingface)."

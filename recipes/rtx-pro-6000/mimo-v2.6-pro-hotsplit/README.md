@@ -7,6 +7,23 @@
 
 Target host: 4× RTX PRO 6000 Blackwell Workstation Edition — 96 GB GDDR7 with ECC each (1792 GB/s per card). The cards are PCIe Gen 5, but in this machine the host slots train at **PCIe 4.0**, so the GPU-to-host link is Gen 4 (~25 GB/s per GPU); host RAM is DDR4. No NVLink. The CPU is whatever the machine reports (`lscpu`, `/proc/meminfo`).
 
+## Software (pinned image)
+
+**No image has been verified on a 4-GPU target host yet.** The patches replace vLLM model files
+wholesale (`PATCH_MODEL_FILES=1`), so the exact vLLM build matters. Until a digest has been
+validated end-to-end, treat the image choice as an experiment:
+
+- Start from the vLLM release whose API the patches were written against (see
+  `patches/mimo_v2_hotsplit.py` docstrings for the expected internals: `Mxfp4MoEMethod`,
+  `make_mxfp4_moe_kernel`, `GPUModelRunner.execute_model`).
+- Pin by digest: `IMAGE=<repo>:<tag>@sha256:<64-hex>`.
+- The launcher checks that some expected methods exist in the mounted vLLM sources before
+  launching (SITE probe), but this is a smoke test, not a compatibility proof: signatures,
+  sharding internals and Marlin kernel expectations are NOT verified automatically.
+- Record the digest you validated in `results/<run-id>/` so the next run is reproducible.
+
+Do **not** assume a random tag "just works" - verify on your hardware first.
+
 ## Files
 
 | file | what |

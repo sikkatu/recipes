@@ -132,7 +132,7 @@ WAIT_TRIES="${WAIT_TRIES:-180}"
 WAIT_SLEEP="${WAIT_SLEEP:-10}"   # readiness polls, 10s apart (tests override this)
 echo "Waiting up to $((WAIT_TRIES * 10)) seconds for API readiness (docker logs -f $CONTAINER)..."
 for _ in $(seq 1 "$WAIT_TRIES"); do
-  if curl -fsS -H "Authorization: Bearer $API_KEY" "http://$BIND:$PORT/v1/models" >/tmp/mimo-models.json; then
+  if curl -fsS -H "Authorization: Bearer $API_KEY" "http://${BIND/::1/[::1]}:$PORT/v1/models" >/tmp/mimo-models.json; then
     cat /tmp/mimo-models.json; echo
     curl -fsS -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
       "http://127.0.0.1:$PORT/v1/chat/completions" \

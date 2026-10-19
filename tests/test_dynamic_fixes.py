@@ -531,7 +531,7 @@ def test_clean_cache_only_huggingface_dir():
         # the permissive old patterns must be gone
         assert '*/.cache/*|*/cache/*|*/.cache' not in t, \
             f"{p}: permissive cache patterns still present"
-        assert '*/huggingface' in t, f"{p}: huggingface path pattern missing"
+        assert 'HF_ROOT' in t or 'STRICT allow-list' in t, f"{p}: strict root check missing"
 
 
 # ============================================= review round 2 (bugs B..H)
@@ -580,8 +580,8 @@ def test_readiness_probe_uses_bind():
         t = p.read_text()
         if "/v1/models" not in t:
             continue
-        assert "http://$BIND:$PORT" in t or "http://$BIND" in t, \
-            f"{p}: readiness probe must use $BIND, not a hardcoded address"
+        assert "http://$BIND" in t or "BIND/::1" in t or "[::1]" in t, \
+            f"{p}: readiness probe must use $BIND (with IPv6 bracket support)"
 
 
 def test_balance_rejects_partial_histogram():
@@ -615,3 +615,49 @@ def test_env_example_has_mandatory_block():
         assert "MANDATORY" in t, f"{p}: mandatory block missing"
         for name in ("IMAGE", "API_KEY", "MODEL_REVISION"):
             assert name in t, f"{p}: mandatory {name} not documented"
+
+
+# ============================================= review round 3 (P1, P2a, P2b, DGX)
+def test_clean_cache_accepts_only_hf_root():
+    """clean-cache must accept only the canonical HF cache root (and hub/), not any
+    arbitrary path containing 'huggingface' (P2a)."""
+    for p in sorted(BASE.glob("*/scripts/manage.sh")):
+        t = p.read_text()
+        assert "STRICT allow-list" in t or "HF_ROOT" in t, f"{p}: strict root check missing"
+        # the permissive wildcard must be gone
+        assert "*/huggingface/*" not in t, f"{p}: wildcard */huggingface/* still present"
+        # must use readlink canonicalisation before comparing
+        assert "readlink -f" in t
+
+
+def test_ipv6_probe_url_brackets():
+    """The readiness probe must bracket IPv6 addresses in the URL (P2b)."""
+    for p in sorted(BASE.glob("*/scripts/run-tp4-*.sh")):
+        t = p.read_text()
+        if "/v1/models" not in t:
+            continue
+        assert "[::1]" in t, f"{p}: IPv6 loopback must be bracketed in probe URL"
+
+
+def test_readme_states_image_unverified():
+    """README must honestly state no image is verified yet (P1), not pretend one is pinned."""
+    for p in sorted(BASE.glob("*/README.md")):
+        t = p.read_text()
+        assert "No image has been verified" in t, f"{p}: image compatibility disclaimer missing"
+        assert "@sha256:" in t, f"{p}: digest pinning requirement missing"
+
+
+def test_no_dgx_references_in_docs():
+    """The host is a custom DDR4/PCIe4 workstation, NOT a DGX (PCIe5/HBM)."""
+    import pathlib
+    root = BASE.parent.parent
+    for p in root.rglob("*.md"):
+        if ".git" in str(p) or ".pytest_cache" in str(p):
+            continue
+        t = p.read_text()
+        assert "DGX" not in t, f"{p}: DGX reference present (host is custom DDR4/PCIe4)"
+    wiki = pathlib.Path("/tmp/recipes.wiki")
+    if wiki.is_dir():
+        for p in wiki.glob("*.md"):
+            t = p.read_text()
+            assert "DGX" not in t, f"wiki/{p.name}: DGX reference present"
