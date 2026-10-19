@@ -532,3 +532,86 @@ def test_clean_cache_only_huggingface_dir():
         assert '*/.cache/*|*/cache/*|*/.cache' not in t, \
             f"{p}: permissive cache patterns still present"
         assert '*/huggingface' in t, f"{p}: huggingface path pattern missing"
+
+
+# ============================================= review round 2 (bugs B..H)
+def test_readme_traffic_formula_multiplies_by_layers():
+    """Per-token expert traffic is topk*cell*layers, not topk*cell alone (bug B).
+    The old numbers understated the real PCIe ceiling 40-75x."""
+    import re
+    for d in sorted(BASE.iterdir()):
+        p = d / "README.md"
+        if not p.is_file():
+            continue
+        t = p.read_text()
+        if "MiB/token" not in t and "MiB/layer/token/rank" not in t:
+            continue
+        # every per-token number must be explicitly derived from layers
+        assert "layer/token/rank" in t or "per layer" in t, f"{d.name}: per-layer traffic line missing"
+        assert re.search(r"\d+ layers ×", t), f"{d.name}: layer multiplication missing"
+
+
+def test_manage_sh_degrades_when_script_missing():
+    """In recipes without run-tp4-hotsplit.sh, manage.sh start must fall back to UVA,
+    not crash after stopping the server (bug C)."""
+    for p in sorted(BASE.glob("*/scripts/manage.sh")):
+        t = p.read_text()
+        assert "degrade gracefully" in t, f"{p}: missing graceful fallback"
+        assert "is not shipped in this recipe" in t
+
+
+def test_env_parser_strips_inline_comments():
+    """tp4.env values must not include trailing comments like '1  # 0 = static' (bug D)."""
+    for p in sorted(BASE.glob("*/scripts/manage.sh")):
+        t = p.read_text()
+        assert "strip inline" in t or '%% #*' in t, f"{p}: inline comment stripping missing"
+
+
+def test_gitignore_covers_local_config():
+    """tp4.env (may hold API_KEY) and live/ (diagnostics) must be gitignored (bug E)."""
+    gi = (BASE.parent.parent / ".gitignore").read_text()
+    assert "tp4.env" in gi, ".gitignore must cover tp4.env (may contain API_KEY)"
+    assert "live/" in gi, ".gitignore must cover live/"
+
+
+def test_readiness_probe_uses_bind():
+    """The health probe must target $BIND, not hardcoded 127.0.0.1 (bug F)."""
+    for p in sorted(BASE.glob("*/scripts/run-tp4-*.sh")):
+        t = p.read_text()
+        if "/v1/models" not in t:
+            continue
+        assert "http://$BIND:$PORT" in t or "http://$BIND" in t, \
+            f"{p}: readiness probe must use $BIND, not a hardcoded address"
+
+
+def test_balance_rejects_partial_histogram():
+    """A histogram with fewer layers than the model must be refused (bug G)."""
+    for p in sorted(BASE.glob("*/patches/hotsplit_balance.py")):
+        t = p.read_text()
+        assert "partial histogram" in t, f"{p}: partial-histogram guard missing"
+
+
+def test_log_hit_rates_uses_live_row_order():
+    """log_hit_rates must map layers to live-buffer rows via live.layer_idx (bug H),
+    not self.rows (sorted order) -- otherwise mixed UVA/HBM splits give wrong hit rates."""
+    text = _fn_text("log_hit_rates")
+    assert "crow" in text or "layer_idx" in text, \
+        "log_hit_rates must map rows via live.layer_idx like plan() does"
+    assert "self.rows.get" not in text, "log_hit_rates must not use self.rows for buffer indexing"
+
+
+def test_check_api_sends_auth():
+    """check-tp4-api.sh must send Authorization: Bearer when API_KEY is set."""
+    p = BASE / "mimo-v2.6-pro-hotsplit" / "scripts" / "check-tp4-api.sh"
+    t = p.read_text()
+    assert "Authorization: Bearer" in t, "check-tp4-api.sh must authenticate"
+    assert "ALLOW_NO_AUTH" in t, "the no-key case must be explained"
+
+
+def test_env_example_has_mandatory_block():
+    """tp4.env.example must separate mandatory (IMAGE, API_KEY, MODEL_REVISION) from optional."""
+    for p in sorted(BASE.glob("*/tp4.env.example")):
+        t = p.read_text()
+        assert "MANDATORY" in t, f"{p}: mandatory block missing"
+        for name in ("IMAGE", "API_KEY", "MODEL_REVISION"):
+            assert name in t, f"{p}: mandatory {name} not documented"

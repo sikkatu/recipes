@@ -3,3 +3,7 @@ __pycache__/
 .pytest_cache/
 *.pyc
 .DS_Store
+# local runtime config and diagnostics (may contain API_KEY)
+tp4.env
+live/
+*.env.local

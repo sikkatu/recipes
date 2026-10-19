@@ -607,9 +607,14 @@ class _Dyn:
             return
         try:
             snap = live.buf.to("cpu", non_blocking=False).numpy()
+            # Map layer -> buffer row the same way plan() does: the live buffer is indexed in
+            # registration (split) order (live.layer_idx), NOT in sorted-layer order (self.rows).
+            # Using self.rows here reads the wrong row whenever UVA and GPU layers are split in
+            # a different order than sorted(layers) -- the hit-rate would be silently wrong.
+            crow = {li: s for s, li in enumerate(live.layer_idx)}
             hot_hits = cold_hits = 0
             for li, dl in self.layers.items():
-                r = self.rows.get(li)
+                r = crow.get(li)
                 if r is None:
                     continue
                 counts = snap[r]

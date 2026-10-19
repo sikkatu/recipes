@@ -36,7 +36,9 @@ expert slice. `balance.json` is the machine-readable form; `scripts/balance.sh` 
 | full routed bank | 94.92 GiB |
 | **hot bank (GPU memory)** | **~36 GiB** (≈7,282 cells, 38%) — anchored on a measured 7360-slot GPU-memory cache from a previous single-GPU lane |
 | cold bank (pinned host) | 58.92 GiB/rank, 235.7 GiB across 4 ranks |
-| decode expert traffic | top-8 × 5.06 ≈ **40.5 MiB/token/rank** |
+| decode expert traffic per layer | top-8 × 5.06 ≈ 40.5 MiB/layer/token/rank |
+| decode expert traffic per token | 75 layers × 40.5 ≈ **3037 MiB/token/rank (~2.97 GiB)** |
+| PCIe 4.0 ceiling (all cold) | 3037 MiB ÷ 25 GB/s ≈ **~8 tok/s** |
 
 `HOTSPLIT_HOT_GIB` experiment ladder (per rank): **31, then 36, then 41 GiB** — raise only after a
 first boot shows free GPU memory (96 GB GDDR7 × 0.90 ≈ 86 GiB usable; hot + KV + activations must fit together).
@@ -84,7 +86,7 @@ teacher-forced logprobs, BFCL and a needle ladder; none has been run on TP4.
 
 ## Results
 
-No measurement on this hardware. Arithmetic only: 40.5. The transfer-only decode ceiling over
+No measurement on this hardware. Arithmetic only: 40.5 MiB/layer/token/rank × 75 layers = ~3037 MiB/token/rank. The transfer-only decode ceiling over
 PCIe 4.0 (~25 GB/s per GPU) is the cold share of that traffic; the plan line from `balance.sh`
 gives the exact coverage for your histogram.
 

@@ -38,6 +38,9 @@ if [ -f "$ROOT/tp4.env" ]; then
     [ -z "$name" ] && continue
     if [ -z "${!name:-}" ]; then            # only fill values not already exported
       val="${line#*=}"
+      # strip inline comment: everything after " # " or trailing " #..."
+      val="${val%% #*}"
+      val="${val%"${val##*[![:space:]]}"}"   # strip trailing whitespace
       export "$name=$val"
     fi
   done < "$ROOT/tp4.env"
@@ -89,7 +92,13 @@ case "$cmd" in
     ;;
   start)
     need_docker
-    exec bash "$HERE/run-tp4-hotsplit.sh"
+    if [ -f "$HERE/run-tp4-hotsplit.sh" ]; then
+      exec bash "$HERE/run-tp4-hotsplit.sh"
+    else
+      echo "NOTE: run-tp4-hotsplit.sh is not shipped in this recipe (degrade gracefully)."
+      echo "      Starting the UVA baseline instead: run-tp4-uva.sh"
+      exec bash "$HERE/run-tp4-uva.sh"
+    fi
     ;;
   start-uva)
     need_docker
@@ -158,7 +167,16 @@ case "$cmd" in
     need_docker
     mode=static
     [ "${HOTSPLIT_DYNAMIC:-1}" = "1" ] && mode=dynamic
-    exec bash "$HERE/check-hotsplit-tp4.sh" "$CONTAINER" "$mode"
+    if [ -f "$HERE/check-hotsplit-tp4.sh" ]; then
+      exec bash "$HERE/check-hotsplit-tp4.sh" "$CONTAINER" "$mode"
+    else
+      echo "NOTE: check-hotsplit-tp4.sh is not shipped in this recipe (degrade gracefully)."
+      echo "      Checking API health instead:"
+      exec bash "$HERE/check-tp4-api.sh" 2>/dev/null || {
+        echo "      check-tp4-api.sh also missing; basic curl check:"
+        curl -s -m 5 -H "Authorization: Bearer ${API_KEY:-}" "${BASE:-http://127.0.0.1:30007}/v1/models" || true
+      }
+    fi
     ;;
   *)
     sed -n '4,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'

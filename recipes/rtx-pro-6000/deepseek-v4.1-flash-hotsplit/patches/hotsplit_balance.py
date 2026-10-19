@@ -54,6 +54,29 @@ def uniform_shares(layers: int, experts: int) -> dict[int, np.ndarray]:
 
 
 def load_or_uniform(counts: str | None, layers: int, experts: int, weights: str) -> dict[int, np.ndarray]:
+    """Load a histogram, rejecting partial coverage: a histogram with fewer layers than the
+    model config produces a misleadingly confident plan (e.g. 37/75 layers reported 94.8%
+    coverage when the real coverage is ~47%). The runtime rejects such histograms; this
+    utility must too (review bug G)."""
+    if not counts:
+        return uniform_shares(layers, experts)
+    import json
+    with open(counts) as f:
+        raw = json.load(f)
+    hist_layers = set()
+    if "train" in raw:
+        for phase in raw["train"].values():
+            hist_layers.update(int(k) for k in phase.keys())
+    else:
+        hist_layers.update(int(k) for k in raw.keys())
+    if hist_layers and len(hist_layers) != layers:
+        raise ValueError(
+            f"partial histogram: {len(hist_layers)} layers found but the model has {layers}. "
+            f"Coverage numbers from a partial histogram are misleading; "
+            f"collect counts for all {layers} layers first.")
+    return uniform_shares(layers, experts) if not counts else _load_real(counts, layers, experts, weights)
+
+def _load_real(counts: str, layers: int, experts: int, weights: str) -> dict[int, np.ndarray]:
     if not counts:
         return uniform_shares(layers, experts)
     shares = load_counts(counts, weights)
