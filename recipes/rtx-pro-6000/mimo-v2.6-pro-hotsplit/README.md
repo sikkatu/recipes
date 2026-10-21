@@ -16,7 +16,9 @@ validated end-to-end, treat the image choice as an experiment:
 - Start from the vLLM release whose API the patches were written against (see
   `patches/mimo_v2_hotsplit.py` docstrings for the expected internals: `Mxfp4MoEMethod`,
   `make_mxfp4_moe_kernel`, `GPUModelRunner.execute_model`).
-- Pin by digest: `IMAGE=<repo>:<tag>@sha256:<64-hex>`.
+- Concrete image (from the vLLM nightly the patches were written against):
+  `IMAGE="vllm/vllm-openai:nightly-8e2beaa3bff595577a069d49d96bde9074294ec2@sha256:167ccd8696bc09f1b63301185134e04b883623f8adcbd8e3a0ec3140a193abcf"`
+  (tag carries the vLLM commit; digest pins the exact bytes).
 - The launcher checks that some expected methods exist in the mounted vLLM sources before
   launching (SITE probe), but this is a smoke test, not a compatibility proof: signatures,
   sharding internals and Marlin kernel expectations are NOT verified automatically.

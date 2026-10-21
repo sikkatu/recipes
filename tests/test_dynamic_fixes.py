@@ -661,3 +661,31 @@ def test_no_dgx_references_in_docs():
         for p in wiki.glob("*.md"):
             t = p.read_text()
             assert "DGX" not in t, f"wiki/{p.name}: DGX reference present"
+
+
+def test_wiki_pins_concrete_image():
+    """Quick Start must give a concrete IMAGE string (tag + digest), not a <tag> placeholder."""
+    import pathlib
+    wiki = pathlib.Path("/tmp/recipes.wiki")
+    if not wiki.is_dir():
+        import pytest
+        pytest.skip("wiki checkout not available")
+    for name in ("Quick-Start.md", "Quick-Start.ru.md", "Quick-Start.zh.md"):
+        t = (wiki / name).read_text()
+        assert "vllm/vllm-openai:nightly-" in t, f"{name}: concrete image tag missing"
+        assert "@sha256:167ccd8696bc09f1b63301185134e04b883623f8adcbd8e3a0ec3140a193abcf" in t, \
+            f"{name}: pinned digest missing"
+        assert "<tag>" not in t, f"{name}: <tag> placeholder still present"
+
+
+def test_wiki_clone_path_single_nesting():
+    """The clone path must not produce ~/recipes/recipes (repo has a nested recipes/ dir)."""
+    import pathlib
+    wiki = pathlib.Path("/tmp/recipes.wiki")
+    if not wiki.is_dir():
+        import pytest
+        pytest.skip("wiki checkout not available")
+    for name in ("Quick-Start.md", "Quick-Start.ru.md", "Quick-Start.zh.md"):
+        t = (wiki / name).read_text()
+        assert "sikkatu-recipes" in t, f"{name}: unambiguous clone dir missing"
+        assert "cd ~/recipes/rtx-pro-6000" not in t, f"{name}: old double-nesting path present"
