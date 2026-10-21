@@ -52,11 +52,11 @@ bash scripts/preflight-tp4.sh
 ```
 首次启动仅出计划（不动权重）：
 ```bash
-MODEL_DIR=/models/MiMo-V2.6-Pro-MOPD HOTSPLIT_DRYRUN=1 MAX_MODEL_LEN=16384 scripts/run-tp4-hotsplit.sh
+MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD HOTSPLIT_DRYRUN=1 MAX_MODEL_LEN=16384 scripts/run-tp4-hotsplit.sh
 ```
 然后正式运行，先 static 后 dynamic：
 ```bash
-MODEL_DIR=/models/MiMo-V2.6-Pro-MOPD HOTSPLIT_DYNAMIC=0 scripts/run-tp4-hotsplit.sh
+MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD HOTSPLIT_DYNAMIC=0 scripts/run-tp4-hotsplit.sh
 ```
 
 ## 验证

@@ -29,7 +29,7 @@
 ```bash
 bash scripts/preflight-tp4.sh
 bash scripts/balance.sh
-MODEL_DIR=/models/GLM-5.3 HOTSPLIT_DYNAMIC=1 scripts/run-tp4-uva.sh
+MODEL_DIR=$HOME/models/GLM-5.3 HOTSPLIT_DYNAMIC=1 scripts/run-tp4-uva.sh
 ```
 
 ## Проверка

@@ -91,7 +91,7 @@ Then the runtime, preflight first, plan-only before moving any weight:
 
 ```bash
 bash scripts/preflight-tp4.sh
-MODEL_DIR=/models/df42c109f1defefcbfcedbe7d905718a12266e40 scripts/run-tp4-uva.sh          # baseline, no split
+MODEL_DIR=$HOME/models/df42c109f1defefcbfcedbe7d905718a12266e40 scripts/run-tp4-uva.sh          # baseline, no split
 ```
 
 Start at 16K–128K context and raise in steps. The hot/cold enforcement hook is described in

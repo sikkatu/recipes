@@ -75,17 +75,17 @@ bash scripts/preflight-tp4.sh
 First boot, plan only (no weights moved, the server runs as the stock UVA baseline; look for one `hotsplit plan [rank N/4]` line per rank):
 
 ```bash
-MODEL_DIR=/models/MiMo-V2.6-Pro-MOPD HOTSPLIT_DRYRUN=1 MAX_MODEL_LEN=16384 scripts/run-tp4-hotsplit.sh
+MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD HOTSPLIT_DRYRUN=1 MAX_MODEL_LEN=16384 scripts/run-tp4-hotsplit.sh
 docker stop mimo-pro-tp4-hotsplit && docker rm mimo-pro-tp4-hotsplit
 ```
 
 Then for real, static first, dynamic second:
 
 ```bash
-MODEL_DIR=/models/MiMo-V2.6-Pro-MOPD HOTSPLIT_DYNAMIC=0 scripts/run-tp4-hotsplit.sh
+MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD HOTSPLIT_DYNAMIC=0 scripts/run-tp4-hotsplit.sh
 scripts/check-hotsplit-tp4.sh
 # stop, then:
-MODEL_DIR=/models/MiMo-V2.6-Pro-MOPD HOTSPLIT_DYNAMIC=1 scripts/run-tp4-hotsplit.sh
+MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD HOTSPLIT_DYNAMIC=1 scripts/run-tp4-hotsplit.sh
 ```
 
 Without `HOTSPLIT_HOT_GIB` the hot budget equals the GPU-memory bytes the stock placement used (KV size unchanged). Set it per rank (45, then 50, 55) only after the first boot shows how much GPU memory is free. Raise `MAX_MODEL_LEN` in steps (32K, 64K, 128K) as in `RUNNING.md`.

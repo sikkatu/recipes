@@ -13,7 +13,7 @@ MAX_MODEL_LEN=16384 CPU_OFFLOAD_GB=96 scripts/run-tp4-uva.sh
 ```
 本地已有模型：
 ```bash
-MODEL_DIR=/models/MiMo-V2.6-Pro-MOPD MAX_MODEL_LEN=16384 scripts/run-tp4-uva.sh
+MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD MAX_MODEL_LEN=16384 scripts/run-tp4-uva.sh
 ```
 
 默认模型：`XiaomiMiMo/MiMo-V2.6-Pro-MOPD`。缓存 `~/.cache/huggingface`。

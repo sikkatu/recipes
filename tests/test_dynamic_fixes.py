@@ -689,3 +689,23 @@ def test_wiki_clone_path_single_nesting():
         t = (wiki / name).read_text()
         assert "sikkatu-recipes" in t, f"{name}: unambiguous clone dir missing"
         assert "cd ~/recipes/rtx-pro-6000" not in t, f"{name}: old double-nesting path present"
+
+
+def test_model_dir_default_is_in_home_not_root():
+    """Model download instructions must default to ~/models (or $HOME/models), never /models
+    at the filesystem root -- users copy commands literally and a root-level path needs sudo
+    and surprises them (found during a live install)."""
+    import pathlib
+    root = BASE.parent.parent
+    for p in list(root.rglob("README*.md")) + list(root.rglob("tp4.env.example")) + list(root.rglob("RUNNING*.md")):
+        if ".git" in str(p) or ".pytest_cache" in str(p):
+            continue
+        t = p.read_text()
+        assert 'MODEL_DIR=/models/' not in t, f"{p}: MODEL_DIR at filesystem root"
+        assert 'MODEL_DIR="/models/' not in t, f"{p}: MODEL_DIR at filesystem root (quoted)"
+    wiki = pathlib.Path('/tmp/recipes.wiki')
+    if wiki.is_dir():
+        for p in wiki.glob('Quick-Start*.md'):
+            t = p.read_text()
+            assert 'export MODEL_DIR="/models/' not in t, f"wiki/{p.name}: MODEL_DIR at filesystem root"
+            assert '$HOME/models' in t or '~/models' in t, f"wiki/{p.name}: home-dir default missing"

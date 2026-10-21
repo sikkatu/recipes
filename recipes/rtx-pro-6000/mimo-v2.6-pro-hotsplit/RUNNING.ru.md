@@ -14,7 +14,7 @@ MAX_MODEL_LEN=16384 CPU_OFFLOAD_GB=96 scripts/run-tp4-uva.sh
 ```
 Для локальной модели:
 ```bash
-MODEL_DIR=/models/MiMo-V2.6-Pro-MOPD MAX_MODEL_LEN=16384 scripts/run-tp4-uva.sh
+MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD MAX_MODEL_LEN=16384 scripts/run-tp4-uva.sh
 ```
 
 Модель по умолчанию: `XiaomiMiMo/MiMo-V2.6-Pro-MOPD`. Кэш — `~/.cache/huggingface`.

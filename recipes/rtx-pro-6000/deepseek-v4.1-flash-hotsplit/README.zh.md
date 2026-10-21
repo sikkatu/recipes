@@ -32,7 +32,7 @@
 ```bash
 bash scripts/preflight-tp4.sh
 bash scripts/balance.sh                 # 按你的流量直方图
-MODEL_DIR=/models/DeepSeek-V4.1-Flash HOTSPLIT_DYNAMIC=1 scripts/run-tp4-uva.sh
+MODEL_DIR=$HOME/models/DeepSeek-V4.1-Flash HOTSPLIT_DYNAMIC=1 scripts/run-tp4-uva.sh
 ```
 热门预算通过 `HOTSPLIT_HOT_GIB`（每 rank）设置。所有旋钮见 `tp4.env.example`。
 

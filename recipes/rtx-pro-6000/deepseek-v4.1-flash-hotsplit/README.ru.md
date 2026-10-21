@@ -34,7 +34,7 @@ RAM хоста — DDR4. Без NVLink.
 ```bash
 bash scripts/preflight-tp4.sh
 bash scripts/balance.sh                 # по вашей гистограмме трафика
-MODEL_DIR=/models/DeepSeek-V4.1-Flash HOTSPLIT_DYNAMIC=1 scripts/run-tp4-uva.sh
+MODEL_DIR=$HOME/models/DeepSeek-V4.1-Flash HOTSPLIT_DYNAMIC=1 scripts/run-tp4-uva.sh
 ```
 Hot-бюджет задаётся через `HOTSPLIT_HOT_GIB` (per-rank). Все ручки — в `tp4.env.example`.
 
