@@ -110,7 +110,8 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-16384}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-1}"
 CPU_OFFLOAD_GB="${CPU_OFFLOAD_GB:-128}"
 GPU_UTIL="${GPU_UTIL:-0.85}"
-MOE_BACKEND="${MOE_BACKEND:-triton}"        # triton: no GPU repack (safe with UVA offload); marlin: repacks into VRAM
+MOE_BACKEND="${MOE_BACKEND:-humming}"       # OBSERVED on target hardware: triton rejects MoEActivation.SILU for MiMo;
+#                # marlin repacks weights into VRAM and OOMs with UVA offload. humming supports SILU and does not repack.
 HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
 HOTSPLIT_COUNTS="${HOTSPLIT_COUNTS:-/w/expert_hist_mix.json}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

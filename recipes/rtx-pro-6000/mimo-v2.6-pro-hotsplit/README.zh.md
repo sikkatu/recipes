@@ -150,7 +150,7 @@ MiMo-V2.6-Pro 在 69 个 MoE 层中的每一层从 384 个专家中路由 8 个�
 
 ## 已知限制与风险
 
-- **在目标硬件上已观察到（2026-10-22）：** Marlin 重打包（`prepare_moe_mxfp4_layer_for_marlin` -> `repack_weight`）会创建 `--cpu-offload-params` 不覆盖的新 GPU 张量。使用 `--moe-backend marlin` + UVA 卸载时，重打包的权重在显存中累积，直到 `torch.empty(1.12 GiB)` 因 CUDA OOM 失败（94.97 中已分配 92.7 GiB）。因此 UVA 基线默认使用 `MOE_BACKEND=triton`（无 GPU 重打包）。`run-tp4-hotsplit.sh` 保留 marlin，因为补丁是针对 Marlin 内核编写的 —— 请为此重打包成本预留显存。
+- **在目标硬件上已观察到（2026-10-22）：** Marlin 重打包（`prepare_moe_mxfp4_layer_for_marlin` -> `repack_weight`）会创建 `--cpu-offload-params` 不覆盖的新 GPU 张量。使用 `--moe-backend marlin` + UVA 卸载时，重打包的权重在显存中累积，直到 `torch.empty(1.12 GiB)` 因 CUDA OOM 失败（94.97 中已分配 92.7 GiB）。使用 `MOE_BACKEND=triton` 时同一运行更早失败：`ValueError: Mxfp4 MoE backend 'TRITON' does not support ... MoEActivation.SILU activation`（MiMo 使用 gated SiLU）。因此 UVA 基线默认使用 `MOE_BACKEND=humming` —— 此 vLLM 构建中唯一既支持 `MoEActivation.SILU` 又不做 GPU 重打包的后端（Humming 就地读取 MXFP4 权重）。`run-tp4-hotsplit.sh` 保留 marlin，因为补丁是针对 Marlin 内核编写的 —— 请为此重打包成本预留显存。
 - `PATCH_MODEL_FILES=1` 将 `mimo_v2_hotsplit.py` / `mimo_v2_omni.py` 挂载到 vLLM 自己的
   模型文件之上 —— 是整文件替换而非小钩子，因此它与精确 vLLM 构建的兼容性至关重要。
   启动脚本因此在启动前对照 `patches/MANIFEST.sha256` 验证每个挂载的补丁，任何不匹配即拒绝。
