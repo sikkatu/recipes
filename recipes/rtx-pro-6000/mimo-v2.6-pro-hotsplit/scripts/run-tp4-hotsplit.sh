@@ -229,23 +229,37 @@ Set SITE= explicitly to skip the probe." ;;
   fi
   echo "SITE (auto-detected or overridden): $SITE"
   # compatibility probe: the image's own files must expose the API our patches override
+  # The patch wraps base_loader.process_weights_after_loading (a module-level function),
+  # NOT a model method -- so verify THAT seam, plus load_weights in the model files.
   PROBE_CMD='import importlib.util,sys
 ok=True
+# 1) the hook seam: base_loader must expose process_weights_after_loading at module level
+try:
+    bl=importlib.util.find_spec("vllm.model_executor.model_loader.base_loader")
+    if bl is None:
+        print("MISSING base_loader"); ok=False
+    else:
+        src=open(bl.origin).read()
+        if "def process_weights_after_loading" in src:
+            print("SEAM base_loader.process_weights_after_loading: present")
+        else:
+            print("SEAM base_loader.process_weights_after_loading: ABSENT"); ok=False
+except Exception as e:
+    print("ERROR base_loader: %r" % e); ok=False
+# 2) the model files must exist and expose load_weights (the patch replaces them wholesale)
 for mod,name in [("vllm.model_executor.models.mimo_v2","mimo_v2"),("vllm.model_executor.models.mimo_v2_omni","mimo_v2_omni")]:
     try:
         m=importlib.util.find_spec(mod)
         if m is None:
-            print(f"MISSING {name}"); ok=False; continue
-        print(f"FOUND {name}: {m.origin}")
+            print("MISSING %s" % name); ok=False; continue
+        print("FOUND %s: %s" % (name, m.origin))
         src=open(m.origin).read()
-        for fn in ["load_weights","process_weights_after_loading"]:
-            if fn in src:
-                print(f"  API {name}.{fn}: present")
-            else:
-                print(f"  API {name}.{fn}: ABSENT")
-                ok=False
+        if "def load_weights" in src:
+            print("  API %s.load_weights: present" % name)
+        else:
+            print("  API %s.load_weights: ABSENT" % name); ok=False
     except Exception as e:
-        print(f"ERROR {name}: {e!r}"); ok=False
+        print("ERROR %s: %r" % (name, e)); ok=False
 sys.exit(0 if ok else 3)'
   echo "Probing the image's own model files for patch compatibility..."
   if ! docker run --rm --entrypoint $PYBIN "$IMAGE" -c "$PROBE_CMD"; then
