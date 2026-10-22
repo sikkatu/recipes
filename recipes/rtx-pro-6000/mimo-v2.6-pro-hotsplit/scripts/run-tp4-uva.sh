@@ -113,12 +113,25 @@ GPU_UTIL="${GPU_UTIL:-0.85}"
 MOE_BACKEND="${MOE_BACKEND:-humming}"       # OBSERVED on target hardware: triton rejects MoEActivation.SILU for MiMo;
 #                # marlin repacks weights into VRAM and OOMs with UVA offload. humming supports SILU and does not repack.
 HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
-HOTSPLIT_COUNTS="${HOTSPLIT_COUNTS:-/w/expert_hist_mix.json}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RECIPE="$(cd "$HERE/.." && pwd)"
+# --- fixed model files (A/B-confirmed on target hardware, 2026-10-22) -----------------------------
+# The image's own vllm/model_executor/models/mimo_v2.py load_weights silently drops fused
+# qkv_proj weight+weight_scale_inv pairs (they can straddle two AutoWeightsLoader calls), and
+# the model then emits training-corpus fragments instead of text. patches/mimo_v2_hotsplit.py
+# carries a loader that keeps those pairs together. A/B with identical weights and flags:
+#   PATCH_MODEL_FILES=1 -> coherent text (" Paris. In the early Middle Ages...")
+#   PATCH_MODEL_FILES=0 -> garbage ("            0     0,   0,  00 ")
+# Default 1 = working output. Set 0 only to reproduce the upstream bug on purpose.
+# The patch's trailing hotsplit hook is gated on HOTSPLIT_COUNTS in the container env; this
+# launcher never forwards that variable, so the hook stays OFF and only the loader is fixed.
+PATCH_MODEL_FILES="${PATCH_MODEL_FILES:-1}"
+SITE="${SITE:-}"   # empty = auto-detect inside the image; set explicitly to override
 command -v docker >/dev/null || die "Docker is missing."
 docker info >/dev/null 2>&1 || die "Docker daemon unavailable or permission denied."
 command -v nvidia-smi >/dev/null || die "nvidia-smi missing."
 command -v curl >/dev/null || die "curl missing."
+command -v sha256sum >/dev/null || die "sha256sum missing."
 N="$(nvidia-smi -L | wc -l | tr -d ' ')"
 [ "$N" = 4 ] || die "Expected 4 GPUs, found $N."
 docker container inspect "$CONTAINER" >/dev/null 2>&1 && die "Container already exists: $CONTAINER"
@@ -151,6 +164,85 @@ MODEL_ARGS=(--model "$MODEL_ARG")
 if [ -z "$MODEL_DIR" ]; then
   # remote fetch: pin the checkpoint commit SHA (validated above)
   MODEL_ARGS+=(--revision "$MODEL_REVISION")
+fi
+# --- patch gate: mount the fixed model files over the image's own ------------------------------
+# Same contract as run-tp4-hotsplit.sh: verify the mounted files against the pinned manifest,
+# auto-detect site-packages INSIDE the image, probe that the image's own files expose the API
+# the patch replaces (load_weights), and log the originals' SHA-256 for provenance.
+if [ "$PATCH_MODEL_FILES" = 1 ]; then
+  for f in "$RECIPE/patches/mimo_v2_hotsplit.py" "$RECIPE/patches/mimo_v2_omni.py" \
+           "$RECIPE/patches/MANIFEST.sha256"; do
+    [ -f "$f" ] || die "missing file: $f"
+  done
+  ( cd "$RECIPE/patches" && sha256sum -c MANIFEST.sha256 >/dev/null 2>&1 ) \
+    || die "patches/ do not match patches/MANIFEST.sha256. The model-replacement patches must be
+byte-identical to the reviewed set; regenerate the manifest only after a deliberate change:
+  ( cd patches && sha256sum mimo_v2_hotsplit.py mimo_v2_omni.py hotsplit.py hotsplit_plan.py numa_bind.py sitecustomize.py expert_hist_mix.json > MANIFEST.sha256 )"
+  echo "patch manifest verified against patches/MANIFEST.sha256"
+  # find_spec("vllm") returns the PACKAGE dir (.../dist-packages/vllm). The mount targets
+  # $SITE/vllm/model_executor/models/, so SITE must be the site-packages ROOT (the parent).
+  # The path only exists INSIDE the container -- validate it there, never with [ -d ] on the host.
+  DETECT_CMD='import importlib.util,os,sys
+s=importlib.util.find_spec("vllm")
+if s is None:
+    sys.exit("vllm package not found inside the image")
+locs=list(s.submodule_search_locations or [])
+pkg = locs[0] if locs else os.path.dirname(s.origin)
+site = os.path.dirname(pkg)   # .../site-packages/vllm -> .../site-packages
+if not os.path.isdir(os.path.join(site, "vllm")):
+    sys.exit("site-packages root has no vllm/: " + site)
+print(site)'
+  PYBIN=python3
+  docker run --rm --entrypoint python3 "$IMAGE" -c 'import sys; print(sys.version)' >/dev/null 2>&1 || PYBIN=python
+  if [ -z "$SITE" ]; then
+    SITE_OUT="$(docker run --rm --entrypoint $PYBIN "$IMAGE" -c "$DETECT_CMD" 2>&1)" || true
+    SITE="$(printf '%s\n' "$SITE_OUT" | tail -n1 | tr -d '\r' | sed 's/[[:space:]]*$//')"
+    case "$SITE" in
+      /*/site-packages|/*/dist-packages) : ;;
+      *) die "failed to detect vLLM site-packages inside the image (entrypoint=$PYBIN).
+Probe output:
+$SITE_OUT
+Expected a site-packages root such as /usr/local/lib/python3.12/dist-packages.
+Set SITE= explicitly to skip the probe." ;;
+    esac
+  fi
+  echo "SITE (auto-detected or overridden): $SITE"
+  # compatibility probe: the image's own files must expose load_weights (what the patch replaces)
+  PROBE_CMD='import importlib.util,sys
+ok=True
+for mod,name in [("vllm.model_executor.models.mimo_v2","mimo_v2"),("vllm.model_executor.models.mimo_v2_omni","mimo_v2_omni")]:
+    try:
+        m=importlib.util.find_spec(mod)
+        if m is None:
+            print("MISSING %s" % name); ok=False; continue
+        print("FOUND %s: %s" % (name, m.origin))
+        src=open(m.origin).read()
+        if "def load_weights" in src:
+            print("  API %s.load_weights: present" % name)
+        else:
+            print("  API %s.load_weights: ABSENT" % name); ok=False
+    except Exception as e:
+        print("ERROR %s: %r" % (name, e)); ok=False
+sys.exit(0 if ok else 3)'
+  echo "Probing the image's own model files for patch compatibility..."
+  if ! docker run --rm --entrypoint $PYBIN "$IMAGE" -c "$PROBE_CMD"; then
+    die "the image's vLLM model files do not match what patches/mimo_v2_hotsplit.py expects.
+The patch replaces load_weights wholesale; if that method is missing or renamed in this
+build the mount will break the model. Set PATCH_MODEL_FILES=0 to use the image's own files
+(known to emit garbage on target hardware) or rebase the patches onto this exact vLLM build."
+  fi
+  HASH_CMD='import hashlib,importlib.util
+for mod in ["vllm.model_executor.models.mimo_v2","vllm.model_executor.models.mimo_v2_omni"]:
+    s=importlib.util.find_spec(mod)
+    if s and s.origin:
+        h=hashlib.sha256(open(s.origin,"rb").read()).hexdigest()
+        print(f"{h}  {s.origin}")'
+  echo "Original module SHA-256 (for provenance; compare with your known-good list):"
+  docker run --rm --entrypoint $PYBIN "$IMAGE" -c "$HASH_CMD" || true
+  MOUNTS+=(
+    -v "$RECIPE/patches/mimo_v2_hotsplit.py:$SITE/vllm/model_executor/models/mimo_v2.py:ro"
+    -v "$RECIPE/patches/mimo_v2_omni.py:$SITE/vllm/model_executor/models/mimo_v2_omni.py:ro"
+  )
 fi
 docker run -d --name "$CONTAINER" --restart no \
   --gpus all --ipc host --network host \

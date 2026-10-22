@@ -150,14 +150,14 @@ MiMo-V2.6-Pro 在 69 个 MoE 层中的每一层从 384 个专家中路由 8 个�
 
 ## 已知限制与风险
 
-- **在目标硬件上已观察到（2026-10-22）：UVA 基线输出乱码。** 服务器启动，`/v1/models` 和 `/v1/chat/completions` 有响应，但生成的文本无意义（先是零 token，然后是跨语言的随机 token）。注意力权重（驻留在 GPU）正常；路由专家权重（116 GiB，通过 UVA 卸载到主机锁定内存）读取错误 —— 很可能原地 MXFP4 读取路径（`MOE_BACKEND=humming`）无法处理 UVA 主机指针。**请勿使用这些输出。** 正在调查：下一步是同样的启动但用 `PATCH_MODEL_FILES=1 HOTSPLIT_DRYRUN=1`（补丁后的模型代码，不移动权重），以区分模型原版代码错误与 UVA 读取路径问题。
+- **已在目标硬件上解决（2026-10-22）：UVA 基线此前输出乱码 - 根因已找到并修复。** 相同权重与参数下的 A/B 测试（`PATCH_MODEL_FILES=1` 对 `0`，`HOTSPLIT_DRYRUN=1`，`MOE_BACKEND=humming`）：补丁后的模型文件生成连贯文本（" Paris. In the early Middle Ages, Paris was the largest city in the western world..."），而镜像自带的 `mimo_v2.py` 生成训练语料片段（"            0     0,   0,  00 "）。根因：原版 `load_weights` 会静默丢失 fused `qkv_proj` 的 weight+`weight_scale_inv` 对（它们可能跨越两次 `AutoWeightsLoader` 调用而被丢弃）；补丁版加载器将这些对保持在一起。`run-tp4-uva.sh` 现在默认挂载修复后的模型文件（`PATCH_MODEL_FILES=1`）。Attention backend `TRITON_ATTN_DIFFKV` 与 `MOE_BACKEND=humming` 已确认可用；检查点权重从未损坏。
 - **在目标硬件上已观察到（2026-10-22）：** Marlin 重打包（`prepare_moe_mxfp4_layer_for_marlin` -> `repack_weight`）会创建 `--cpu-offload-params` 不覆盖的新 GPU 张量。使用 `--moe-backend marlin` + UVA 卸载时，重打包的权重在显存中累积，直到 `torch.empty(1.12 GiB)` 因 CUDA OOM 失败（94.97 中已分配 92.7 GiB）。使用 `MOE_BACKEND=triton` 时同一运行更早失败：`ValueError: Mxfp4 MoE backend 'TRITON' does not support ... MoEActivation.SILU activation`（MiMo 使用 gated SiLU）。因此 UVA 基线默认使用 `MOE_BACKEND=humming` —— 此 vLLM 构建中唯一既支持 `MoEActivation.SILU` 又不做 GPU 重打包的后端（Humming 就地读取 MXFP4 权重）。`run-tp4-hotsplit.sh` 保留 marlin，因为补丁是针对 Marlin 内核编写的 —— 请为此重打包成本预留显存。
 - `PATCH_MODEL_FILES=1` 将 `mimo_v2_hotsplit.py` / `mimo_v2_omni.py` 挂载到 vLLM 自己的
   模型文件之上 —— 是整文件替换而非小钩子，因此它与精确 vLLM 构建的兼容性至关重要。
   启动脚本因此在启动前对照 `patches/MANIFEST.sha256` 验证每个挂载的补丁，任何不匹配即拒绝。
   其余两项检查（签名/API 与目标 vLLM 的一致性，以及张量形状/路由/输出的 GPU 集成冒烟测试）
   是在信任补丁之前需在目标主机上运行的实验；两者均列在 RUNNING.md 中。
-- `mimo_v2_hotsplit.py` 是为固定 nightly 镜像对 vLLM `mimo_v2.py` 的完整替换；其
+- `mimo_v2_hotsplit.py` 是针对固定 nightly 镜像的 vLLM `mimo_v2.py` 完整替换。其 fused-fp8-qkv 分片路径（`tp_rank`）已由修复后的加载器在 TP4 下验证（2026-10-22）。`PATCH_MODEL_FILES=0` 保留镜像自带的模型文件 - 这正是输出训练语料片段的配置（见上面“已解决”条目）；仅在需要刻意复现上游 bug 时使用。
   fused-fp8-qkv 分片路径（`tp_rank`）仅在 TP1 上试过。如果 TP4 输出是乱码，
   请用 `PATCH_MODEL_FILES=0` 重试（镜像自带的模型文件，通过 `sitecustomize` 挂钩）以区分两种原因。
 - 排名 `expert_hist_mix.json` 来自先前单 GPU 通道上的代理流量；请为你的流量重新排名
