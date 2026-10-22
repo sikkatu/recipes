@@ -115,6 +115,7 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-16384}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-1}"
 CPU_OFFLOAD_GB="${CPU_OFFLOAD_GB:-128}"        # per rank; with hotsplit it only decides the initial placement
 GPU_UTIL="${GPU_UTIL:-0.85}"
+MOE_BACKEND="${MOE_BACKEND:-marlin}"        # patches are written against Marlin kernels; the repack cost is real (see Known limits)
 HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
 # hotsplit knobs (documented in tp4.env.example)
 HOTSPLIT_COUNTS="${HOTSPLIT_COUNTS:-/w/expert_hist_mix.json}"
@@ -293,7 +294,7 @@ docker run -d --name "$CONTAINER" --restart no \
   --offload-backend uva \
   --cpu-offload-gb "$CPU_OFFLOAD_GB" \
   --cpu-offload-params routed_experts.w13_weight routed_experts.w2_weight \
-  --moe-backend marlin \
+  --moe-backend "$MOE_BACKEND" \
   --max-model-len "$MAX_MODEL_LEN" \
   --max-num-seqs "$MAX_NUM_SEQS" \
   --max-num-batched-tokens 1024 \

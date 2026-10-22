@@ -122,6 +122,7 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-16384}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-1}"
 CPU_OFFLOAD_GB="${CPU_OFFLOAD_GB:-48}"
 GPU_UTIL="${GPU_UTIL:-0.85}"
+MOE_BACKEND="${MOE_BACKEND:-triton}"        # triton: no GPU repack (safe with UVA offload); marlin: repacks into VRAM
 HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 command -v docker >/dev/null || die "Docker is missing."

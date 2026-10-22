@@ -110,6 +110,7 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-16384}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-1}"
 CPU_OFFLOAD_GB="${CPU_OFFLOAD_GB:-72}"
 GPU_UTIL="${GPU_UTIL:-0.85}"
+MOE_BACKEND="${MOE_BACKEND:-triton}"        # triton: no GPU repack (safe with UVA offload); marlin: repacks into VRAM
 HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
 HOTSPLIT_COUNTS="${HOTSPLIT_COUNTS:-/w/expert_hist_mix.json}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -166,7 +167,7 @@ docker run -d --name "$CONTAINER" --restart no \
   --offload-backend uva \
   --cpu-offload-gb "$CPU_OFFLOAD_GB" \
   --cpu-offload-params routed_experts.w13_weight routed_experts.w2_weight \
-  --moe-backend marlin \
+  --moe-backend "$MOE_BACKEND" \
   --max-model-len "$MAX_MODEL_LEN" \
   --max-num-seqs "$MAX_NUM_SEQS" \
   --max-num-batched-tokens 1024 \
