@@ -229,24 +229,42 @@ Set SITE= explicitly to skip the probe." ;;
   fi
   echo "SITE (auto-detected or overridden): $SITE"
   # compatibility probe: the image's own files must expose the API our patches override
-  # The patch wraps base_loader.process_weights_after_loading (a module-level function),
-  # NOT a model method -- so verify THAT seam, plus load_weights in the model files.
-  PROBE_CMD='import importlib.util,sys
+  # The patch overwrites base_loader.process_weights_after_loading (a NAME imported
+  # into base_loader's namespace from model_loader/utils.py) -- so verify THAT seam:
+  # the name is bound in base_loader, called bare (not utils.<name>()), and defined in utils.py.
+  PROBE_CMD='import importlib.util,re,sys
 ok=True
-# 1) the hook seam: base_loader must expose process_weights_after_loading at module level
+def flat(s):
+    return re.sub(r"\s+","",s)
+# 1) the hook seam: base_loader must bind and bare-call process_weights_after_loading
 try:
     bl=importlib.util.find_spec("vllm.model_executor.model_loader.base_loader")
     if bl is None:
         print("MISSING base_loader"); ok=False
     else:
         src=open(bl.origin).read()
-        if "def process_weights_after_loading" in src:
-            print("SEAM base_loader.process_weights_after_loading: present")
+        f=flat(src)
+        bound=("process_weights_after_loading" in src)
+        # bare call: name followed by "(" but not preceded by "." (module-qualified)
+        called=bool(re.search(r"(?<![.\w])process_weights_after_loading\(", f))
+        if bound and called:
+            print("SEAM base_loader->utils.process_weights_after_loading: present (bound + bare-called)")
         else:
-            print("SEAM base_loader.process_weights_after_loading: ABSENT"); ok=False
+            print("SEAM base_loader->utils.process_weights_after_loading: ABSENT (bound=%s called=%s)" % (bound, called)); ok=False
 except Exception as e:
     print("ERROR base_loader: %r" % e); ok=False
-# 2) the model files must exist and expose load_weights (the patch replaces them wholesale)
+# 2) the definition must exist in model_loader/utils.py
+try:
+    u=importlib.util.find_spec("vllm.model_executor.model_loader.utils")
+    if u is None:
+        print("MISSING model_loader.utils"); ok=False
+    elif "def process_weights_after_loading" in open(u.origin).read():
+        print("DEF model_loader.utils.process_weights_after_loading: present")
+    else:
+        print("DEF model_loader.utils.process_weights_after_loading: ABSENT"); ok=False
+except Exception as e:
+    print("ERROR model_loader.utils: %r" % e); ok=False
+# 3) the model files must exist and expose load_weights (the patch replaces them wholesale)
 for mod,name in [("vllm.model_executor.models.mimo_v2","mimo_v2"),("vllm.model_executor.models.mimo_v2_omni","mimo_v2_omni")]:
     try:
         m=importlib.util.find_spec(mod)
