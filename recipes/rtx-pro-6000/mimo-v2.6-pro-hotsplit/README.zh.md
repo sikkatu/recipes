@@ -1,9 +1,10 @@
 # MiMo-V2.6-Pro — 4× RTX PRO 6000（TP4）：UVA 专家卸载 + hotsplit
 > [English](README.md) | [Русский](README.ru.md) | **中文**
 
-**状态：已编写，未在目标硬件上运行。** `patches/` 或 `scripts/run-tp4-hotsplit.sh` 中的内容
-均未在 4-GPU 机器上执行过。纯规划逻辑有单元测试（`tests/test_hotsplit_tp4.py`）；
-vLLM/CUDA 部分仅做了语法检查。请将首次启动当实验对待并回传日志。
+**状态：已在目标硬件上验证（2026-10-22）。** UVA 基线（`run-tp4-uva.sh`）在 4-GPU 主机上端到端运行：
+权重加载正常，API 有响应，生成连贯（相对原版模型加载器的 A/B 已确认）。
+`run-tp4-hotsplit.sh` 已用 `HOTSPLIT_DRYRUN=1` + `MOE_BACKEND=humming` 验证（可启动，补丁/probe 路径有效）。
+**完整** hotsplit 运行（Marlin 重打包）**尚未验证** —— 重打包时仍会 OOM（见“已知限制”）。
 
 目标主机：4× RTX PRO 6000 Blackwell Workstation Edition —— 每卡 96 GB GDDR7 带 ECC
 （1792 GB/s）。卡是 PCIe Gen 5，但本机主机插槽协商为 **PCIe 4.0**，GPU↔主机链路为 Gen 4
@@ -11,8 +12,9 @@ vLLM/CUDA 部分仅做了语法检查。请将首次启动当实验对待并回�
 
 ## 软件（固定镜像）
 
-**尚无镜像在 4-GPU 目标主机上验证过。** 补丁整体替换 vLLM 的模型文件（`PATCH_MODEL_FILES=1`），
-因此精确的 vLLM 构建至关重要。在 digest 端到端验证之前，请将镜像选择当实验对待：
+**固定镜像已在 4-GPU 目标主机上验证（2026-10-22）。** 补丁整体替换 vLLM 的模型文件
+（`PATCH_MODEL_FILES=1`），因此精确的 vLLM 构建至关重要 —— 下面的 digest 就是端到端验证过的那个。
+若改用其他构建，请将该选择当实验对待：
 
 - 从补丁编写所针对的 vLLM 版本开始（见 `patches/mimo_v2_hotsplit.py` 文档字符串中的
   期望内部件：`Mxfp4MoEMethod`、`make_mxfp4_moe_kernel`、`GPUModelRunner.execute_model`）。

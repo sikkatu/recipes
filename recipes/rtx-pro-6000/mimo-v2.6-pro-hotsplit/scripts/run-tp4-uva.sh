@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # MiMo-V2.6-Pro on 4x RTX PRO 6000: vLLM TP4 + UVA expert offload baseline (no hot/cold split).
-# AUTHORED, NOT RUN ON TARGET HARDWARE. Read ../README.md first.
+# VERIFIED on target hardware (2026-10-22): weights load, API answers, generation coherent. Read ../README.md first.
 set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
 

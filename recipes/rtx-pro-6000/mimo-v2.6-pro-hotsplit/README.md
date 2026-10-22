@@ -3,15 +3,15 @@
 > **English** | [Русский](README.ru.md) | [中文](README.zh.md)
 
 
-**Status: authored, not run on target hardware.** Nothing in `patches/` or `scripts/run-tp4-hotsplit.sh` has been executed on a 4-GPU machine. The pure planning logic has unit tests (`tests/test_hotsplit_tp4.py`); the vLLM/CUDA parts have only been syntax-checked. Treat the first boot as an experiment and send the logs back.
+**Status: VERIFIED on target hardware (2026-10-22).** The UVA baseline (`run-tp4-uva.sh`) runs end-to-end on the 4-GPU host: weights load, the API answers, and generation is coherent (A/B-confirmed against the stock model loader). `run-tp4-hotsplit.sh` was exercised with `HOTSPLIT_DRYRUN=1` + `MOE_BACKEND=humming` (boots, patch/probe path works). The FULL hotsplit run (Marlin repack) is **not yet verified** — it still OOMs during the repack (see Known limits).
 
 Target host: 4× RTX PRO 6000 Blackwell Workstation Edition — 96 GB GDDR7 with ECC each (1792 GB/s per card). The cards are PCIe Gen 5, but in this machine the host slots train at **PCIe 4.0**, so the GPU-to-host link is Gen 4 (~25 GB/s per GPU); host RAM is DDR4. No NVLink. The CPU is whatever the machine reports (`lscpu`, `/proc/meminfo`).
 
 ## Software (pinned image)
 
-**No image has been verified on a 4-GPU target host yet.** The patches replace vLLM model files
-wholesale (`PATCH_MODEL_FILES=1`), so the exact vLLM build matters. Until a digest has been
-validated end-to-end, treat the image choice as an experiment:
+**The pinned image IS verified on the 4-GPU target host (2026-10-22).** The patches replace vLLM model files
+wholesale (`PATCH_MODEL_FILES=1`), so the exact vLLM build matters — the digest below is the one
+that was validated end-to-end. If you switch to a different build, treat that choice as an experiment:
 
 - Start from the vLLM release whose API the patches were written against (see
   `patches/mimo_v2_hotsplit.py` docstrings for the expected internals: `Mxfp4MoEMethod`,

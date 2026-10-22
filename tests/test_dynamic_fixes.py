@@ -670,11 +670,23 @@ def test_ipv6_probe_url_brackets():
         assert "[::1]" in t, f"{p}: IPv6 loopback must be bracketed in probe URL"
 
 
-def test_readme_states_image_unverified():
-    """README must honestly state no image is verified yet (P1), not pretend one is pinned."""
+def test_readme_states_verification_status_honestly():
+    """Each README must state its TRUE verification status, not a blanket claim (P1).
+
+    MiMo was verified end-to-end on the target host (2026-10-22); the other recipes are
+    still unverified and must keep the disclaimer. Every README must pin the digest."""
+    verified = {"mimo-v2.6-pro-hotsplit"}
     for p in sorted(BASE.glob("*/README.md")):
         t = p.read_text()
-        assert "No image has been verified" in t, f"{p}: image compatibility disclaimer missing"
+        slug = p.parent.name
+        if slug in verified:
+            assert "IS verified" in t or "ПРОВЕРЕНО" in t or "已在目标硬件上验证" in t, \
+                f"{p}: verified recipe must state verification"
+            assert "No image has been verified" not in t, \
+                f"{p}: stale 'no image verified' claim contradicts the verified status"
+        else:
+            assert "No image has been verified" in t or "Ни один образ не проверен" in t or "尚无镜像" in t, \
+                f"{p}: unverified recipe must keep the image compatibility disclaimer"
         assert "@sha256:" in t, f"{p}: digest pinning requirement missing"
 
 

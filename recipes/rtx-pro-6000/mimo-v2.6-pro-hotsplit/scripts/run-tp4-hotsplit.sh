@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # MiMo-V2.6-Pro on 4x RTX PRO 6000: vLLM TP4 + UVA expert offload + hotsplit (static or dynamic hot experts).
-# AUTHORED, NOT RUN ON TARGET HARDWARE. Read ../README.md first; run with HOTSPLIT_DRYRUN=1 once.
+# PARTIALLY VERIFIED (2026-10-22): HOTSPLIT_DRYRUN=1 + MOE_BACKEND=humming boots; the FULL Marlin run still OOMs at repack. Read ../README.md first.
 set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
 
