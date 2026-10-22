@@ -203,7 +203,7 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
     cat "$MODELS_JSON"; echo
     curl -fsS -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
       "http://$URLHOST:$PORT/v1/chat/completions" \
-      -d '{"model":"glm53","messages":[{"role":"user","content":"Reply exactly TP4_OK"}],"max_tokens":16,"temperature":0}'
+      -d '{"model":"glm53","messages":[{"role":"user","content":"Reply exactly TP4_OK"}],"max_tokens":64,"temperature":0}'
     echo
     echo "Balance check: bash $HERE/balance.sh"
     exit 0
