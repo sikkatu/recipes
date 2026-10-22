@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""render_index.py — regenerate the recipe index in README.md from every recipes/*/*/recipe.yaml.
+"""render_index.py — regenerate the recipe index in README.md / README.ru.md / README.zh.md from every recipes/*/*/recipe.yaml.
 
 Usage:
     python3 scripts/render_index.py           # rewrite README.md between the index markers
@@ -32,6 +32,23 @@ STATUS_ICON = {
     "experimental": "🧪 experimental",
     "draft": "📝 draft",
     "deprecated": "⛔ deprecated",
+}
+STATUS_ICON_RU = {
+    "verified": "✅ проверен",
+    "experimental": "🧪 эксперимент",
+    "draft": "📝 черновик",
+    "deprecated": "⛔ устарел",
+}
+STATUS_ICON_ZH = {
+    "verified": "✅ 已验证",
+    "experimental": "🧪 实验",
+    "draft": "📝 草稿",
+    "deprecated": "⛔ 已弃用",
+}
+TABLE_HEADER = {
+    "en": lambda: ["", "| Hardware | Recipe | Model | Status | Headline | Updated |", "|---|---|---|---|---|---|"],
+    "ru": lambda: ["", "| Железо | Рецепт | Модель | Статус | Ключевое | Обновлено |", "|---|---|---|---|---|---|"],
+    "zh": lambda: ["", "| 硬件 | 配方 | 模型 | 状态 | 要点 | 更新 |", "|---|---|---|---|---|---|"],
 }
 
 
@@ -94,7 +111,7 @@ def model_cell(r: dict) -> str:
     return f"{name} ({q_short})" if q_short else name
 
 
-def render() -> str:
+def render(lang: str = "en") -> str:
     rows = []
     for p in sorted(ROOT.glob("recipes/*/*/recipe.yaml")):
         r = yaml.safe_load(p.read_text())
@@ -109,7 +126,10 @@ def render() -> str:
         hw, slug = d.parts[-2:]
         if hw + "/" + slug in have:
             continue
-        readme = d / "README.md"
+        loc = {"en": "README.md", "ru": "README.ru.md", "zh": "README.zh.md"}[lang]
+        readme = d / loc
+        if not readme.is_file():
+            readme = d / "README.md"
         if not readme.is_file():
             continue
         title = slug
@@ -127,12 +147,12 @@ def render() -> str:
         }))
     if not rows:
         return "\n_No recipes yet._\n"
-    out = ["", "| Hardware | Recipe | Model | Status | Headline | Updated |",
-           "|---|---|---|---|---|---|"]
+    out = [*TABLE_HEADER[lang]()]
     for hw, slug, r in rows:
         rel = f"recipes/{hw}/{slug}"
         status = r.get("status", "draft")
-        icon = STATUS_ICON.get(status, md_escape(status))
+        icons = {"en": STATUS_ICON, "ru": STATUS_ICON_RU, "zh": STATUS_ICON_ZH}[lang]
+        icon = icons.get(status, md_escape(status))
         out.append(
             f"| `{hw}` | [{md_escape(r['title'])}]({rel}/) | {model_cell(r)} "
             f"| {icon} | {headline(r)} | {norm_date(r.get('updated'))} |"
@@ -145,22 +165,28 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true")
     a = ap.parse_args(argv)
-    readme = ROOT / "README.md"
-    text = readme.read_text()
-    if START not in text or END not in text:
-        print(f"README.md lacks {START} / {END} markers")
-        return 1
-    head, rest = text.split(START, 1)
-    _, tail = rest.split(END, 1)
-    new = f"{head}{START}\n{render()}\n{END}{tail}"
-    if a.check:
-        if new != text:
-            print("README.md index is stale — run scripts/render_index.py")
+    stale = []
+    for fname, lang in (("README.md", "en"), ("README.ru.md", "ru"), ("README.zh.md", "zh")):
+        readme = ROOT / fname
+        text = readme.read_text()
+        if START not in text or END not in text:
+            print(f"{fname} lacks {START} / {END} markers")
             return 1
-        print("README.md index up to date")
+        head, rest = text.split(START, 1)
+        _, tail = rest.split(END, 1)
+        new = f"{head}{START}\n{render(lang)}\n{END}{tail}"
+        if a.check:
+            if new != text:
+                stale.append(fname)
+        else:
+            readme.write_text(new)
+            print(f"{fname} index rewritten")
+    if a.check:
+        if stale:
+            print("stale index: " + ", ".join(stale) + " — run scripts/render_index.py")
+            return 1
+        print("index up to date in all languages")
         return 0
-    readme.write_text(new)
-    print("README.md index rewritten")
     return 0
 
 

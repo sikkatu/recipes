@@ -315,7 +315,8 @@ esac
 MODELS_JSON="$(mktemp /tmp/tp4-models.XXXXXX.json)"
 WAIT_TRIES="${WAIT_TRIES:-180}"
 WAIT_SLEEP="${WAIT_SLEEP:-10}"   # readiness polls, 10s apart (tests override this)
-echo "Waiting up to $((WAIT_TRIES * 10)) seconds for API readiness (docker logs -f $CONTAINER)..."
+echo "Waiting up to $((WAIT_TRIES * 10)) seconds for API readiness. Progress prints every ${WAIT_SLEEP}s:"
+START_TS="$(date +%s)"
 for _ in $(seq 1 "$WAIT_TRIES"); do
   # fail fast: if the container died, waiting cannot help -- show why and stop now
   RUN_STATE="$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' "$CONTAINER" 2>/dev/null || echo gone)"
@@ -327,7 +328,11 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
       docker logs --tail 250 "$CONTAINER" >&2 || true
       exit 1 ;;
   esac
-  if curl -fsS -H "Authorization: Bearer $API_KEY" "http://$URLHOST:$PORT/v1/models" > "$MODELS_JSON"; then
+  # progress line every poll: tells the user the server is alive and what it is doing
+  ELAPSED=$(( $(date +%s) - START_TS ))
+  LASTLOG="$(docker logs --tail 400 "$CONTAINER" 2>&1 | grep -E 'Loading|loaded|weights|safetensors|offload|Ready|Starting|server|UVA|memory' | tail -1 | cut -c1-110 || true)"
+  printf '[%3ds] container=%s  %s\n' "$ELAPSED" "${RUN_STATE%% *}" "${LASTLOG:-starting...}"
+  if curl -fsS --max-time 3 -H "Authorization: Bearer $API_KEY" "http://$URLHOST:$PORT/v1/models" > "$MODELS_JSON" 2>/dev/null; then
     cat "$MODELS_JSON"; echo
     curl -fsS -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
       "http://$URLHOST:$PORT/v1/chat/completions" \

@@ -14,6 +14,14 @@ digest контейнера и ревизией модели *эта* коман
 
 ## Индекс
 <!-- recipe-index:start -->
+
+| Железо | Рецепт | Модель | Статус | Ключевое | Обновлено |
+|---|---|---|---|---|---|
+| `rtx-pro-6000` | [DeepSeek-V4.1-Flash — 4× RTX PRO 6000 (96 GB), TP4: баланс экспертов для UVA-выгрузки](recipes/rtx-pro-6000/deepseek-v4.1-flash-hotsplit/) | DeepSeek-V4.1-Flash | 📝 черновик | — | — |
+| `rtx-pro-6000` | [GLM-5.3-Flash — 4× RTX PRO 6000 (96 GB), TP4: баланс экспертов для UVA-выгрузки](recipes/rtx-pro-6000/glm-5.3-flash-hotsplit/) | GLM-5.3-Flash | 📝 черновик | — | — |
+| `rtx-pro-6000` | [GLM-5.3 — 4× RTX PRO 6000 (96 GB), TP4: баланс экспертов для UVA-выгрузки](recipes/rtx-pro-6000/glm-5.3-hotsplit/) | GLM-5.3 | 📝 черновик | — | — |
+| `rtx-pro-6000` | [MiMo-V2.6-Pro — 4× RTX PRO 6000 (TP4): UVA-выгрузка экспертов + hotsplit](recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/) | MiMo-V2.6-Pro | 📝 черновик | — | — |
+
 <!-- recipe-index:end -->
 
 ## О чём этот репозиторий
