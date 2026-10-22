@@ -134,14 +134,19 @@ def render(lang: str = "en") -> str:
             continue
         title = slug
         model = slug
-        for line in readme.read_text().splitlines():
+        status = "draft"
+        rtext = readme.read_text()
+        for line in rtext.splitlines():
             if line.startswith("# "):
                 title = line[2:].strip()
                 model = title.split(" — ")[0].split(" – ")[0].strip() or slug
                 break
+        # honest status from the README's own Status line (all three languages)
+        if re.search(r"Status: VERIFIED|Статус: ПРОВЕРЕНО|状态：已在目标硬件上验证", rtext):
+            status = "verified"
         rows.append((hw, slug, {
             "title": title,
-            "status": "draft",
+            "status": status,
             "updated": None,
             "model": {"name": model, "quantization": ""},
         }))

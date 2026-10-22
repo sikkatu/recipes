@@ -19,7 +19,7 @@
 | `rtx-pro-6000` | [DeepSeek-V4.1-Flash — 4× RTX PRO 6000（96 GB），TP4：UVA 专家卸载的专家均衡](recipes/rtx-pro-6000/deepseek-v4.1-flash-hotsplit/) | DeepSeek-V4.1-Flash | 📝 草稿 | — | — |
 | `rtx-pro-6000` | [GLM-5.3-Flash — 4× RTX PRO 6000（96 GB），TP4：UVA 专家卸载的专家均衡](recipes/rtx-pro-6000/glm-5.3-flash-hotsplit/) | GLM-5.3-Flash | 📝 草稿 | — | — |
 | `rtx-pro-6000` | [GLM-5.3 — 4× RTX PRO 6000（96 GB），TP4：UVA 专家卸载的专家均衡](recipes/rtx-pro-6000/glm-5.3-hotsplit/) | GLM-5.3 | 📝 草稿 | — | — |
-| `rtx-pro-6000` | [MiMo-V2.6-Pro — 4× RTX PRO 6000（TP4）：UVA 专家卸载 + hotsplit](recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/) | MiMo-V2.6-Pro | 📝 草稿 | — | — |
+| `rtx-pro-6000` | [MiMo-V2.6-Pro — 4× RTX PRO 6000（TP4）：UVA 专家卸载 + hotsplit](recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/) | MiMo-V2.6-Pro | ✅ 已验证 | — | — |
 
 <!-- recipe-index:end -->
 
@@ -38,30 +38,25 @@
 ```
 recipes/<hardware>/<recipe>/
   README.md          当前状态：运行什么、硬件、软件、启动、验证、结果、已知限制、回退
-  RUNNING.md         简短启动卡（草稿）
   balance.json       专家几何（层数、专家数、top-k、每专家字节数、TP）  [均衡配方]
   tp4.env.example    每个旋钮及其默认值
   scripts/           启动 / 预检 / 均衡 / 检查 —— 实际运行过的内容
   patches/           挂载进容器的代码；均衡计算器和规划器
-  results/<run-id>/  每个已发布数字的出处包（测量后）
 ```
-`hardware/` 保存每台机器一份带**实测值**的档案；
-`scripts/collect_system_snapshot.sh` 负责收集。
 
-## 契约，十句话
-1. 不用 `:latest` —— 永远用镜像 digest。
-2. 模型修订版用 commit SHA。
-3. 硬件以 `nvidia-smi` 报告为准。
-4. 每个指标：数值、单位、负载形状、run-id、方法、原始文件。
-5. 五道关 —— schema、digest、health、quality、performance —— 带通过日期。
-6. `verified` 表示五道关都在一次记录的运行中通过。
-7. 质量关按配方声明；没有全局标准。
-8. 已知限制必须列出 —— 否则你没看。
-9. 回退是一个脚本。
-10. 仓库中没有任何凭据。
+## 契约
 
-完整契约见 [CONTRIBUTING.md](CONTRIBUTING.md)，字段见
-[schemas/recipe.schema.json](schemas/recipe.schema.json)。
+1. 不用 `:latest` —— 始终使用镜像 digest。
+2. 模型修订版是 commit SHA。
+3. 硬件以 `nvidia-smi` 报告为准 —— 不是规格表。
+4. 状态标注诚实：`verified` 表示配方在记录的主机上端到端跑通；未运行过的配方如实说明。
+5. 已知限制必须列出 —— 否则你没看。
+6. 回退是一个脚本。
+7. 仓库中没有任何凭据。
+
+## 署名
+
+这些配方是大量真实硬件实操的成果。如果你在自己的工作中使用本仓库 —— 配方、测量、分析或文档 —— **请注明出处**：在发布基于本仓库的结果时链接 `https://github.com/sikkatu/recipes`（以及具体配方页面）。Fork 和衍生文档必须保留该引用。欢迎提出问题和修正；不接受无声明的照搬。
 
 ## 本地验证
 ```bash

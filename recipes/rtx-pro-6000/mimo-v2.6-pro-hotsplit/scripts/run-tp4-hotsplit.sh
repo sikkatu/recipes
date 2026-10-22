@@ -115,7 +115,9 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-16384}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-1}"
 CPU_OFFLOAD_GB="${CPU_OFFLOAD_GB:-128}"        # per rank; with hotsplit it only decides the initial placement
 GPU_UTIL="${GPU_UTIL:-0.85}"
-MOE_BACKEND="${MOE_BACKEND:-marlin}"        # patches are written against Marlin kernels; the repack cost is real (see Known limits)
+MOE_BACKEND="${MOE_BACKEND:-humming}"       # humming boots with UVA offload (verified). marlin + UVA OOMs at the repack
+#                # (observed 2026-10-22) and is refused unless HOTSPLIT_ALLOW_MARLIN_UVA=1.
+#                # NOTE: the full split bank code is Marlin-specific; on humming the split is an experiment.
 HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
 # hotsplit knobs (documented in tp4.env.example)
 HOTSPLIT_COUNTS="${HOTSPLIT_COUNTS:-/w/expert_hist_mix.json}"
@@ -302,6 +304,37 @@ for mod in ["vllm.model_executor.models.mimo_v2","vllm.model_executor.models.mim
   BOOT_HOOK=0   # the replaced mimo_v2.py already calls hotsplit.apply_hotsplit
 fi
 
+# --- preflight guards (OBSERVED on target hardware, 2026-10-22) ------------------------------------
+# 1. marlin + UVA offload ALWAYS dies with CUDA OOM: prepare_moe_mxfp4_layer_for_marlin ->
+#    repack_weight allocates NEW GPU tensors that --cpu-offload-params does not cover, and they
+#    accumulate in VRAM until torch.empty fails (92.7 GiB of 94.97 allocated on rank 3).
+#    Refuse to start (saves ~10 min of weight loading before the crash) unless explicitly overridden.
+# 2. With full UVA offload every expert tensor is host-resident, so the stock GPU-resident expert
+#    bytes are 0 and an empty HOTSPLIT_HOT_GIB would plan an EMPTY hot set -- the split becomes a
+#    silent no-op with extra kernel launches. Warn and require an explicit budget.
+# 3. The bank construction in patches/hotsplit.py is written against the Marlin kernel's quant-config
+#    API (scales passed explicitly). Humming reads scales from the layer object instead, so a full
+#    split on humming is NOT equivalent -- only the dry-run path is backend-agnostic.
+if [ "$MOE_BACKEND" = "marlin" ] && [ "${HOTSPLIT_ALLOW_MARLIN_UVA:-0}" != "1" ]; then
+  die "MOE_BACKEND=marlin + UVA offload is a known CUDA OOM on this hardware (the Marlin repack
+creates GPU tensors that --cpu-offload-params does not cover; observed 2026-10-22 on 4x RTX PRO 6000,
+92.7 GiB of 94.97 allocated before torch.empty failed). Options:
+  * MOE_BACKEND=humming HOTSPLIT_DRYRUN=1   -- boot + plan only (verified path)
+  * MOE_BACKEND=humming (full run)          -- EXPERIMENT: the bank code is Marlin-specific;
+    humming reads scales from the layer, not per-bank. Output may be wrong -- verify before use.
+  * HOTSPLIT_ALLOW_MARLIN_UVA=1             -- run anyway and accept the OOM (debugging only)."
+fi
+if [ -z "$HOTSPLIT_HOT_GIB" ] && [ "$HOTSPLIT_DRYRUN" != "1" ]; then
+  echo "WARNING: HOTSPLIT_HOT_GIB is empty and CPU_OFFLOAD_GB=$CPU_OFFLOAD_GB offloads the whole" >&2
+  echo "  expert bank. The stock GPU-resident expert bytes are then 0, so the default budget is" >&2
+  echo "  0 GiB and the plan will put EVERYTHING in the cold bank -- the split is a no-op." >&2
+  echo "  Set HOTSPLIT_HOT_GIB to the number of GiB per rank you want hot (e.g. 20-50)." >&2
+fi
+if [ "$MOE_BACKEND" != "marlin" ] && [ "$HOTSPLIT_DRYRUN" != "1" ]; then
+  echo "WARNING: the full hotsplit bank construction is written against Marlin kernels." >&2
+  echo "  MOE_BACKEND=$MOE_BACKEND bypasses the Marlin repack (good for VRAM), but humming's" >&2
+  echo "  quant-config API reads scales from the layer, not per bank -- verify output before use." >&2
+fi
 ENVS=(
   -e HF_HOME=/root/.cache/huggingface
   -e PYTHONPATH=/w
