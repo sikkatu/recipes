@@ -8,6 +8,7 @@ die(){ echo "ERROR: $*" >&2; exit 1; }
 # BIND is where the SERVER listens (host networking: -p would be a no-op, so the bind is the only
 # control). Loopback by default; API_KEY is required unless you explicitly opt out.
 BIND="${BIND:-127.0.0.1}"
+BIND="${BIND#\[}"; BIND="${BIND%\]}"   # accept [::1]; vLLM --host wants the bare address
 API_KEY="${API_KEY:-}"
 ALLOW_NO_AUTH="${ALLOW_NO_AUTH:-0}"
 # --- API key handling ---------------------------------------------------------------------------
@@ -200,7 +201,7 @@ if [ "$PATCH_MODEL_FILES" = 1 ]; then
   # 3. Log the originals' SHA-256 for provenance (compare with a known-good list in the log).
   DETECT_CMD='import importlib.util,sys; s=importlib.util.find_spec("vllm"); print(s.submodule_search_locations[0])'
   if [ -z "$SITE" ]; then
-    SITE="$(docker run --rm "$IMAGE" python -c "$DETECT_CMD" 2>/dev/null | tr -d '
+    SITE="$(docker run --rm --entrypoint python "$IMAGE" -c "$DETECT_CMD" 2>/dev/null | tr -d '
 ')" || die "failed to detect vLLM site-packages inside the image"
     [ -n "$SITE" ] || die "empty vLLM site-packages path detected; set SITE= explicitly"
   fi
@@ -225,7 +226,7 @@ for mod,name in [("vllm.model_executor.models.mimo_v2","mimo_v2"),("vllm.model_e
         print(f"ERROR {name}: {e!r}"); ok=False
 sys.exit(0 if ok else 3)'
   echo "Probing the image's own model files for patch compatibility..."
-  if ! docker run --rm "$IMAGE" python -c "$PROBE_CMD"; then
+  if ! docker run --rm --entrypoint python "$IMAGE" -c "$PROBE_CMD"; then
     die "the image's vLLM model files do not match what patches/mimo_v2_hotsplit.py expects.
 The patches replace load_weights / process_weights_after_loading wholesale; if those methods are
 missing or renamed in this build the mount will break the model. Either use PATCH_MODEL_FILES=0
@@ -239,7 +240,7 @@ for mod in ["vllm.model_executor.models.mimo_v2","vllm.model_executor.models.mim
         h=hashlib.sha256(open(s.origin,"rb").read()).hexdigest()
         print(f"{h}  {s.origin}")'
   echo "Original module SHA-256 (for provenance; compare with your known-good list):"
-  docker run --rm "$IMAGE" python -c "$HASH_CMD" || true
+  docker run --rm --entrypoint python "$IMAGE" -c "$HASH_CMD" || true
   MOUNTS+=(
     -v "$RECIPE/patches/mimo_v2_hotsplit.py:$SITE/vllm/model_executor/models/mimo_v2.py:ro"
     -v "$RECIPE/patches/mimo_v2_omni.py:$SITE/vllm/model_executor/models/mimo_v2_omni.py:ro"
@@ -304,6 +305,14 @@ docker run -d --name "$CONTAINER" --restart no \
   --enable-auto-tool-choice \
   --host "$BIND" --port "$PORT"
 
+# URL host for the readiness probes: bracket IPv6, probe wildcard binds via loopback
+case "$BIND" in
+  0.0.0.0) URLHOST=127.0.0.1 ;;
+  ::)      URLHOST='[::1]' ;;
+  *:*)     URLHOST="[$BIND]" ;;
+  *)       URLHOST="$BIND" ;;
+esac
+MODELS_JSON="$(mktemp /tmp/tp4-models.XXXXXX.json)"
 WAIT_TRIES="${WAIT_TRIES:-180}"
 WAIT_SLEEP="${WAIT_SLEEP:-10}"   # readiness polls, 10s apart (tests override this)
 echo "Waiting up to $((WAIT_TRIES * 10)) seconds for API readiness (docker logs -f $CONTAINER)..."
@@ -318,10 +327,10 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
       docker logs --tail 250 "$CONTAINER" >&2 || true
       exit 1 ;;
   esac
-  if curl -fsS -H "Authorization: Bearer $API_KEY" "http://${BIND/::1/[::1]}:$PORT/v1/models" >/tmp/mimo-models.json; then
-    cat /tmp/mimo-models.json; echo
+  if curl -fsS -H "Authorization: Bearer $API_KEY" "http://$URLHOST:$PORT/v1/models" > "$MODELS_JSON"; then
+    cat "$MODELS_JSON"; echo
     curl -fsS -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
-      "http://127.0.0.1:$PORT/v1/chat/completions" \
+      "http://$URLHOST:$PORT/v1/chat/completions" \
       -d '{"model":"mimo-pro","messages":[{"role":"user","content":"Reply exactly TP4_OK"}],"max_tokens":16,"temperature":0}'
     echo
     echo "Now run: $HERE/check-hotsplit-tp4.sh $CONTAINER"

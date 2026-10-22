@@ -10,6 +10,8 @@ set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOTSPLIT_CONTAINER="${HOTSPLIT_CONTAINER:-glm-flash-tp4-hotsplit}"
+# CONTAINER is the variable every other script uses; accept it as an alias
+HOTSPLIT_CONTAINER="${CONTAINER:-$HOTSPLIT_CONTAINER}"
 BASELINE_CONTAINER="${BASELINE_CONTAINER:-glm-flash-tp4-uva}"
 START_BASELINE=0
 LIVE_DIR="${LIVE_DIR:-$PWD/live}"   # default under set -u: the summary must not crash after removal

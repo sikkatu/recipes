@@ -81,8 +81,12 @@ def test_calculator_arithmetic(slug):
     # hot is an integer number of cells
     assert abs(r["hot_cells"] * cell_rank / 1024 - r["hot_gib_rank"]) < 0.05
     assert r["hot_cells"] <= layers * experts
-    # decode traffic is topk * slice
-    assert abs(r["decode_bytes_per_tok_mib_rank"] - topk * cell_rank) < 0.1
+    # decode traffic: per layer it is topk * slice; per TOKEN it is that times every MoE layer
+    assert abs(r["decode_mib_per_layer_token_rank"] - topk * cell_rank) < 0.1
+    assert abs(r["decode_mib_per_token_rank_all_cold"] - layers * topk * cell_rank) < 0.5
+    # uniform prior: the cold share of the traffic is the cold share of the cells
+    cold_frac = 1 - r["hot_cells"] / (layers * experts)
+    assert abs(r["cold_mib_per_token_rank"] - r["decode_mib_per_token_rank_all_cold"] * cold_frac) < 1.0
 
 
 @pytest.mark.parametrize("slug", RECIPES)

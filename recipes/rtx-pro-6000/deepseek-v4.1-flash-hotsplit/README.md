@@ -14,9 +14,12 @@ experiment and send the logs back.
 ## What this runs
 
 DeepSeek-V4.1-Flash on 4× RTX PRO 6000 (96 GB GDDR7, PCIe 4.0 host link, no NVLink): vLLM TP4 + UVA expert offload with a
-per-expert hot/cold split — hot routed experts in GPU memory, the rest read from pinned host memory
-over PCIe. Same idea and same balance algorithm as the MiMo-V2.6-Pro hotsplit recipe, with this
-model's geometry.
+**UVA expert offload baseline plus the offline hot/cold balance planner** — the run itself is
+stock vLLM TP4 with layer-granular UVA offload. The per-expert hot/cold split is planned and sized
+here (`patches/hotsplit_balance.py`, `scripts/balance.sh`) with the same algorithm as the
+MiMo-V2.6-Pro hotsplit recipe, but the runtime hook (`patches/hotsplit.py`) is **not mounted by
+these launchers yet** — the recipe ships the planner and the patches, not a running hot/cold split.
+Treat the hot/cold numbers below as a plan, not a measurement.
 
 - model `deepseek-ai/DeepSeek-V4.1-Flash` @ `df42c109f1defefcbfcedbe7d905718a12266e40`
 - quantization: MXFP4 (I8+E8M0 block scales) (as shipped, nothing re-quantized)
@@ -47,8 +50,8 @@ averages; `scripts/balance.sh --counts your.json` prints the exact coverage for 
 
 ## Software (pinned image)
 
-**No image has been verified on a 4-GPU target host yet.** The patches replace vLLM model files
-wholesale (`PATCH_MODEL_FILES=1`), so the exact vLLM build matters. Until a digest has been
+**No image has been verified on a 4-GPU target host yet.** These launchers run the stock vLLM model code (no `PATCH_MODEL_FILES`); the hot/cold
+patches in `patches/` are applied only when you wire the runtime hook in yourself. Until a digest has been
 validated end-to-end, treat the image choice as an experiment:
 
 - Start from the vLLM release whose API the patches were written against (see

@@ -16,7 +16,9 @@ size `HOTSPLIT_HOT_GIB` before you ever launch a server.
 Geometry file (balance.json):
     {"layers": 40, "experts": 384, "topk": 6, "cell_mib_full": 17.9, "tp": 4}
 
-Histogram JSON: same formats load_counts() accepts, i.e. either
+Histogram JSON: same formats load_counts() accepts. Layer keys are the MoE layers' REAL model indices
+(the same ids hotsplit.py derives from `layers.<n>.` module names -- 1..69 for MiMo, 3..77 for a model with
+3 dense prefix layers), not 0..N-1. Either
     {"train": {"decode"|"prefill": {layer: [E counts]}}}  or  {layer: {"counts": [E counts]}}
 If --counts is omitted a uniform prior is used (every expert equal), which yields a
 deterministic id-order hot set -- useful only for sizing, not for real placement.
@@ -89,13 +91,16 @@ def _load_real(counts: str, layers: int, experts: int, weights: str) -> dict[int
 def plan(g: dict, shares: dict[int, np.ndarray], budget_gib: float):
     layers, experts, tp = g["layers"], g["experts"], g["tp"]
     cell_rank = g["cell_mib_full"] / tp * MiB            # bytes of one expert shard, per rank
-    cell_bytes = {li: int(cell_rank) for li in range(layers)}
+    # key by the layer ids the histogram actually uses: the runtime keys MoE layers by their real model
+    # index (e.g. 1..69 or 3..77 behind dense prefix layers), not 0..N-1
+    cell_bytes = {li: int(cell_rank) for li in shares}
     budget = budget_gib * GiB
     hot, used = plan_hot_cells(shares, cell_bytes, budget, experts)
     return hot, used, cell_rank
 
 
-def report(g: dict, shares: dict, hot, used: int, cell_rank: float, budget_gib: float) -> dict:
+def report(g: dict, shares: dict, hot, used: int, cell_rank: float, budget_gib: float,
+           pcie_gbs: float = 25.0) -> dict:
     layers, experts, tp = g["layers"], g["experts"], g["tp"]
     bank_bytes = layers * experts * cell_rank
     hot_cells = sum(len(v) for v in hot.values())
@@ -103,6 +108,16 @@ def report(g: dict, shares: dict, hot, used: int, cell_rank: float, budget_gib: 
     # routing coverage: share of routed tokens served from the hot bank
     tot = sum(float(s.sum()) for s in shares.values())
     cov = sum(float(shares[li][hot[li]].sum()) for li in hot if hot[li]) / max(tot, 1e-12)
+    # Per-layer cold fraction, averaged over layers: every token passes through every MoE layer, so each
+    # layer's miss rate counts once regardless of how many routed rows its histogram recorded.
+    cold_fracs = []
+    for li, s in shares.items():
+        t = float(s.sum())
+        cold_fracs.append(1.0 - (float(s[hot[li]].sum()) / t if t > 0 and hot[li] else 0.0))
+    cold_frac = sum(cold_fracs) / max(len(cold_fracs), 1)
+    per_layer_mib = g["topk"] * cell_rank / MiB                 # one layer, one token, one rank
+    per_token_mib = per_layer_mib * layers                      # all layers, everything cold
+    cold_per_token_mib = per_token_mib * cold_frac              # what actually crosses PCIe (batch-1 decode)
     out = {
         "layers": layers, "experts": experts, "topk": g["topk"], "tp": tp,
         "cell_mib_full": g["cell_mib_full"], "cell_mib_rank": round(cell_rank / MiB, 3),
@@ -114,7 +129,12 @@ def report(g: dict, shares: dict, hot, used: int, cell_rank: float, budget_gib: 
         "hot_cells": hot_cells, "total_cells": total_cells,
         "hot_fraction": round(hot_cells / total_cells, 4),
         "routing_coverage": round(cov, 4),
-        "decode_bytes_per_tok_mib_rank": round(g["topk"] * cell_rank / MiB, 1),
+        "decode_mib_per_layer_token_rank": round(per_layer_mib, 1),
+        "decode_mib_per_token_rank_all_cold": round(per_token_mib, 1),
+        "cold_mib_per_token_rank": round(cold_per_token_mib, 1),
+        "pcie_gbs_assumed": pcie_gbs,
+        "pcie_ceiling_tok_s": (round(pcie_gbs * 1e9 / (cold_per_token_mib * MiB), 1)
+                               if cold_per_token_mib > 0 else None),
     }
     return out
 
@@ -126,13 +146,15 @@ def main(argv=None) -> int:
     ap.add_argument("--weights", default="", help="phase weights, e.g. 'decode=1,prefill=0'")
     ap.add_argument("--gib", type=float, required=True, help="hot budget, GiB PER RANK")
     ap.add_argument("--dump-hot", help="write the {layer: [expert ids]} hot map to this JSON file")
+    ap.add_argument("--pcie-gbs", type=float, default=25.0,
+                    help="usable host->GPU GB/s per rank for the transfer-only decode ceiling (default 25, PCIe 4.0 x16)")
     ap.add_argument("--json", action="store_true", help="print the summary as JSON")
     a = ap.parse_args(argv)
 
     g = geometry(a.balance_json)
     shares = load_or_uniform(a.counts, g["layers"], g["experts"], a.weights)
     hot, used, cell_rank = plan(g, shares, a.gib)
-    out = report(g, shares, hot, used, cell_rank, a.gib)
+    out = report(g, shares, hot, used, cell_rank, a.gib, a.pcie_gbs)
 
     if a.dump_hot:
         with open(a.dump_hot, "w") as f:
@@ -150,7 +172,11 @@ def main(argv=None) -> int:
               f"({out['hot_fraction']*100:.1f}%)")
         print(f"COLD (host):      {out['cold_gib_rank']} GiB/rank, {out['host_gib_all_ranks']} GiB across {out['tp']} ranks")
         print(f"routing coverage: {out['routing_coverage']*100:.2f}% of routed tokens served from GPU memory")
-        print(f"decode traffic:   ~{out['decode_bytes_per_tok_mib_rank']} MiB/token/rank (top-{out['topk']} x slice)")
+        print(f"decode traffic:   {out['decode_mib_per_layer_token_rank']} MiB/layer/token/rank (top-{out['topk']} x slice); "
+              f"{out['decode_mib_per_token_rank_all_cold']} MiB/token/rank if everything were cold")
+        ceil = out["pcie_ceiling_tok_s"]
+        print(f"cold traffic:     {out['cold_mib_per_token_rank']} MiB/token/rank over PCIe -> transfer-only batch-1 ceiling "
+              f"{'unbounded (all hot)' if ceil is None else f'~{ceil} tok/s'} at {out['pcie_gbs_assumed']} GB/s")
     return 0
 
 

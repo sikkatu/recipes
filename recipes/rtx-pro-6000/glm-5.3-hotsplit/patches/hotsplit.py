@@ -442,8 +442,6 @@ class _Dyn:
         snap = live.buf.to("cpu").numpy().copy()
         delta = (snap - self.prev).astype(np.float64)
         self.prev = snap
-        self.plan_ok += 1
-        self.plan_errors = 0  # a good pass resets the consecutive-error count
         plans = []
         for li, dl in self.layers.items():
             c = self.crow.get(li)
@@ -457,6 +455,12 @@ class _Dyn:
             sw = plan_swaps(sc, dl.hot, self.max_swaps, self.margin)
             if sw:
                 plans.append((dl, sw))
+        # Only a pass that got through the whole loop counts as good. Resetting this BEFORE the loop
+        # made `plan_errors` stick at 1 forever, so HOTSPLIT_DYN_MAX_PLAN_ERRORS could never fire.
+        self.plan_ok += 1
+        self.plan_errors = 0
+        logger.info("hotsplit dynamic plan pass #%d at step %d: %d layer(s) staged for swap %s",
+                    self.plan_ok, self.steps, len(plans), getattr(self, "tag", ""))
         return plans
 
     def commit(self, plans) -> None:
@@ -509,12 +513,12 @@ class _Dyn:
         old_rows = []  # (dl, slots, hw13_rows, hw2_rows, hs13_rows, hs2_rows)
         for dl, slots, new in staged:
             old_rows.append((dl, slots,
-                             dl.hw13.index_select(0, slots).clone(),
-                             dl.hw2.index_select(0, slots).clone(),
-                             dl.hs13.index_select(0, slots).clone(),
-                             dl.hs2.index_select(0, slots).clone()))
-        old_hv = self.emap_hot[t_hr, t_hc].clone()
-        old_cv = self.emap_cold[t_cr, t_cc].clone()
+                             dl.hw13.index_select(0, slots),   # index_select/advanced indexing already copy
+                             dl.hw2.index_select(0, slots),
+                             dl.hs13.index_select(0, slots),
+                             dl.hs2.index_select(0, slots)))
+        old_hv = self.emap_hot[t_hr, t_hc]
+        old_cv = self.emap_cold[t_cr, t_cc]
         # Order the swap stream only NOW: every snapshot above is enqueued on the compute
         # stream, so stream.wait_stream(compute_stream) makes the copies wait for them.
         # (Calling it earlier would let a copy start while snapshots are still being made.)
@@ -893,6 +897,7 @@ def apply_hotsplit(model: torch.nn.Module) -> None:
     dyn = None
     if dynamic:
         dyn = _Dyn(sorted(layers), E)
+        dyn.tag = tag
         dyn.set_prior({li: shares[li] for li in layers})
 
     # order: UVA layers (consume GPU memory, free host) while GPU memory allows, else a GPU-resident layer (frees GPU memory, consumes host)

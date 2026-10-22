@@ -102,7 +102,9 @@ def check_recipe(path: Path, root: Path | None = None) -> list[str]:
 
     # 4. referenced files exist
     def need(rel: str | None, what: str, base: Path = rdir) -> None:
-        if rel and not (base / rel).exists():
+        if rel and not _inside(base, rel):
+            errs.append(pre + f"{what} '{rel}' escapes {base.name}/")
+        elif rel and not (base / rel).exists():
             errs.append(pre + f"{what} '{rel}' not found")
 
     need((r.get("launch") or {}).get("script"), "launch.script")
@@ -117,8 +119,11 @@ def check_recipe(path: Path, root: Path | None = None) -> list[str]:
         if not prov:
             errs.append(pre + f"metrics[{i}] '{m.get('name') if isinstance(m, dict) else m}' has no provenance")
             continue
-        raw = rdir / "results" / str(prov.get("run_id")) / str(prov.get("raw"))
-        if not raw.exists():
+        run_dir = rdir / "results" / str(prov.get("run_id"))
+        raw = run_dir / str(prov.get("raw"))
+        if not _inside(run_dir, str(prov.get("raw"))):
+            errs.append(pre + f"metrics[{i}] raw '{prov.get('raw')}' escapes results/{prov.get('run_id')}/")
+        elif not raw.exists():
             errs.append(pre + f"metrics[{i}] raw file results/{prov.get('run_id')}/{prov.get('raw')} not found")
 
     # 6. verified gates
@@ -134,7 +139,9 @@ def check_recipe(path: Path, root: Path | None = None) -> list[str]:
     # 7. patches sha
     for p in (r.get("runtime") or {}).get("patches") or []:
         fp = rdir / p.get("path", "")
-        if not fp.exists():
+        if not _inside(rdir, p.get("path", "")):
+            errs.append(pre + f"patch '{p.get('path')}' escapes the recipe dir")
+        elif not fp.exists():
             errs.append(pre + f"patch '{p.get('path')}' not found")
         elif _sha256(fp) != p.get("sha256"):
             errs.append(pre + f"patch '{p.get('path')}' sha256 mismatch (on disk {_sha256(fp)[:12]}…)")
@@ -143,7 +150,9 @@ def check_recipe(path: Path, root: Path | None = None) -> list[str]:
     ctr = (r.get("runtime") or {}).get("container") or {}
     if ctr.get("dockerfile"):
         fp = rdir / ctr["dockerfile"]
-        if not fp.exists():
+        if not _inside(rdir, ctr["dockerfile"]):
+            errs.append(pre + f"container dockerfile '{ctr['dockerfile']}' escapes the recipe dir")
+        elif not fp.exists():
             errs.append(pre + f"container dockerfile '{ctr['dockerfile']}' not found")
         elif ctr.get("dockerfile_sha256") and _sha256(fp) != ctr["dockerfile_sha256"]:
             errs.append(pre + f"container dockerfile sha256 mismatch (on disk {_sha256(fp)[:12]}…)")
@@ -151,7 +160,15 @@ def check_recipe(path: Path, root: Path | None = None) -> list[str]:
         errs.append(pre + "container dockerfile_sha256 set without container dockerfile")
 
     # 8. credentials
-    for f in rdir.rglob("*"):
+    errs.extend(scan_credentials(rdir, pre))
+    return errs
+
+
+def scan_credentials(rdir: Path, pre: str = "") -> list[str]:
+    """Credential-shaped strings anywhere under one recipe dir. Runs for drafts too: a draft without
+    recipe.yaml used to get no scan at all, although SECURITY.md promises CI rejects credentials."""
+    errs: list[str] = []
+    for f in sorted(rdir.rglob("*")):
         if not f.is_file() or f.suffix.lower() in CRED_SKIP_SUFFIX or f.stat().st_size > 5_000_000:
             continue
         try:
@@ -162,8 +179,15 @@ def check_recipe(path: Path, root: Path | None = None) -> list[str]:
             if pat.search(txt):
                 errs.append(pre + f"possible credential in {f.relative_to(rdir)} (pattern {pat.pattern[:30]}…)")
                 break
-
     return errs
+
+
+def _inside(base: Path, rel: str) -> bool:
+    """True when base/rel stays inside base after resolving '..' and symlinks (absolute rel is refused)."""
+    try:
+        return (base / rel).resolve().is_relative_to(base.resolve()) and not Path(rel).is_absolute()
+    except (OSError, ValueError):
+        return False
 
 
 def _find_root(path: Path) -> Path:
@@ -184,6 +208,8 @@ def check_draft_contract(root: Path) -> list[str]:
         has_yaml = (d / "recipe.yaml").is_file()
         if not has_readme:
             errs.append(f"{d.relative_to(root)}: missing README.md (every recipe needs one)")
+        if not has_yaml:
+            errs.extend(scan_credentials(d, f"{d.relative_to(root)}: "))
         if not has_yaml:
             # draft without recipe.yaml is allowed — but it must not claim verified/experimental
             if has_readme:

@@ -8,6 +8,7 @@ die(){ echo "ERROR: $*" >&2; exit 1; }
 # BIND is where the SERVER listens (host networking: -p would be a no-op, so the bind is the
 # only control). Loopback by default; API_KEY is required unless you explicitly opt out.
 BIND="${BIND:-127.0.0.1}"
+BIND="${BIND#\[}"; BIND="${BIND%\]}"   # accept [::1]; vLLM --host wants the bare address
 API_KEY="${API_KEY:-}"
 ALLOW_NO_AUTH="${ALLOW_NO_AUTH:-0}"
 # --- API key handling ---------------------------------------------------------------------------
@@ -175,6 +176,14 @@ docker run -d --name "$CONTAINER" --restart no \
   --tool-call-parser deepseek \
   --enable-auto-tool-choice \
   --host "$BIND" --port "$PORT"
+# URL host for the readiness probes: bracket IPv6, probe wildcard binds via loopback
+case "$BIND" in
+  0.0.0.0) URLHOST=127.0.0.1 ;;
+  ::)      URLHOST='[::1]' ;;
+  *:*)     URLHOST="[$BIND]" ;;
+  *)       URLHOST="$BIND" ;;
+esac
+MODELS_JSON="$(mktemp /tmp/tp4-models.XXXXXX.json)"
 WAIT_TRIES="${WAIT_TRIES:-180}"
 WAIT_SLEEP="${WAIT_SLEEP:-10}"   # readiness polls, 10s apart (tests override this)
 echo "Waiting up to $((WAIT_TRIES * 10)) seconds for API readiness (docker logs -f $CONTAINER)..."
@@ -189,10 +198,10 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
       docker logs --tail 250 "$CONTAINER" >&2 || true
       exit 1 ;;
   esac
-  if curl -fsS -H "Authorization: Bearer $API_KEY" "http://${BIND/::1/[::1]}:$PORT/v1/models" >/tmp/deepseek-flash-models.json; then
-    cat /tmp/deepseek-flash-models.json; echo
+  if curl -fsS -H "Authorization: Bearer $API_KEY" "http://$URLHOST:$PORT/v1/models" > "$MODELS_JSON"; then
+    cat "$MODELS_JSON"; echo
     curl -fsS -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
-      "http://127.0.0.1:$PORT/v1/chat/completions" \
+      "http://$URLHOST:$PORT/v1/chat/completions" \
       -d '{"model":"deepseek-flash","messages":[{"role":"user","content":"Reply exactly TP4_OK"}],"max_tokens":16,"temperature":0}'
     echo
     echo "Now run: $HERE/check-hotsplit-tp4.sh $CONTAINER"

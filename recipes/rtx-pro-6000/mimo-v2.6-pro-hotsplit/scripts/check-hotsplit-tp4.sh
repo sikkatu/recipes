@@ -41,7 +41,7 @@ if grep -q "HOOK STATUS boot_hook=FAILED" <<<"$L"; then
 fi
 echo
 echo "== hotsplit stages =="
-chk "hotsplit plan logged on every rank"      "hotsplit plan \[rank [0-9]/4\]" 4
+chk "hotsplit plan pass logged on every rank"      "hotsplit dynamic plan pass #.*\[rank [0-9]/4\]" 4
 chk "hotsplit finished on every rank"         "hotsplit done \[rank [0-9]/4\]" 4
 echo
 echo "== dynamic mode (MODE=$MODE) =="
@@ -87,7 +87,7 @@ echo "== dynamic metrics (per rank from logs) =="
 # hook status, planner passes, planner errors, committed swaps, last update time, hit rate.
 for r in 0 1 2 3; do
   hook="$(grep -Eo "\\[rank $r/4\\].*dynamic_hook=[A-Z]+" <<<"$L" | grep -Eo 'dynamic_hook=[A-Z]+' | tail -1)"
-  passes="$(grep -c "\\[rank $r/4\\].*hotsplit plan" <<<"$L" || true)"
+  passes="$(grep -c "\\[rank $r/4\\].*hotsplit dynamic plan pass #" <<<"$L" || true)"
   commits="$(grep -Eo "hotsplit dynamic update #[0-9]+" <<<"$L" | wc -l)"
   perr="$(grep -Ec "planning failed|commit failed" <<<"$L" || true)"
   last="$(grep -Eo "hotsplit dynamic update #[0-9]+ at step [0-9]+" <<<"$L" | tail -1)"
@@ -123,7 +123,7 @@ echo "      run a few requests and re-run this script: the dynamic update count 
 echo "      and live/counts.rank*.json timestamps should advance. In dynamic mode (MODE=$MODE)"
 echo "      a zero update count after real traffic means the counter never fired -- treat as a FAIL."
 if [ "$MODE" = "dynamic" ]; then
-  plans_seen="$(grep -Ec "hotsplit plan" <<<"$L" || true)"
+  plans_seen="$(grep -Ec "hotsplit dynamic plan pass #" <<<"$L" || true)"
   if [ "${n_updates:-0}" -eq 0 ]; then
     if [ "${plans_seen:-0}" -ge 2 ]; then
       # planner ran several times but never committed a swap: either the workload matches the

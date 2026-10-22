@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Day-to-day management for the MiMo-V2.6-Pro TP4 hotsplit recipe.
+# Day-to-day management for the MiMo-V2.6-Pro TP4 recipe.
 # Thin wrapper over the existing launchers -- no second source of truth for env or flags.
 #
 # usage: manage.sh <command>
