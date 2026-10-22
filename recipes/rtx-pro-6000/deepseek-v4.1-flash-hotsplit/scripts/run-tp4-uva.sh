@@ -211,7 +211,7 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
       "http://$URLHOST:$PORT/v1/chat/completions" \
       -d '{"model":"deepseek-flash","messages":[{"role":"user","content":"Reply exactly TP4_OK"}],"max_tokens":16,"temperature":0}'
     echo
-    echo "Now run: $HERE/check-hotsplit-tp4.sh $CONTAINER"
+    echo "Baseline ready (no hot/cold split in this launcher). Verify the API with: bash $HERE/check-tp4-api.sh"
     exit 0
   fi
   sleep "$WAIT_SLEEP"

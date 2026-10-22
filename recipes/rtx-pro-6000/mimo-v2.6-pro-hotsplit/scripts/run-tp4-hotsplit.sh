@@ -200,11 +200,24 @@ if [ "$PATCH_MODEL_FILES" = 1 ]; then
   #    override (load_weights, process_weights_after_loading, the MoE apply path) before we
   #    mount over them. A mismatch means the patches were written for a different vLLM build.
   # 3. Log the originals' SHA-256 for provenance (compare with a known-good list in the log).
-  DETECT_CMD='import importlib.util,sys; s=importlib.util.find_spec("vllm"); print(s.submodule_search_locations[0])'
+  DETECT_CMD='import importlib.util,sys
+s=importlib.util.find_spec("vllm")
+if s is None:
+    sys.exit("vllm package not found inside the image")
+locs=list(s.submodule_search_locations or [])
+print(locs[0] if locs else s.origin)'
   if [ -z "$SITE" ]; then
-    SITE="$(docker run --rm --entrypoint python "$IMAGE" -c "$DETECT_CMD" 2>/dev/null | tr -d '
-')" || die "failed to detect vLLM site-packages inside the image"
-    [ -n "$SITE" ] || die "empty vLLM site-packages path detected; set SITE= explicitly"
+    PYBIN=python3
+    docker run --rm --entrypoint python3 "$IMAGE" -c 'import sys; print(sys.version)' >/dev/null 2>&1 || PYBIN=python
+    SITE_OUT="$(docker run --rm --entrypoint $PYBIN "$IMAGE" -c "$DETECT_CMD" 2>&1)"       || die "failed to detect vLLM site-packages inside the image (entrypoint=$PYBIN).
+Probe output:
+$SITE_OUT
+Set SITE= explicitly to skip the probe (the path is /usr/local/lib/python3.12/dist-packages in the pinned image)." 
+    SITE="$(tail -n1 <<<"$SITE_OUT" | tr -d '')"
+    [ -n "$SITE" ] && [ -d "$SITE" ] || die "empty or non-directory vLLM site-packages path detected: '$SITE'.
+Probe output:
+$SITE_OUT
+Set SITE= explicitly." 
   fi
   echo "SITE (auto-detected or overridden): $SITE"
   # compatibility probe: the image's own files must expose the API our patches override
@@ -227,7 +240,7 @@ for mod,name in [("vllm.model_executor.models.mimo_v2","mimo_v2"),("vllm.model_e
         print(f"ERROR {name}: {e!r}"); ok=False
 sys.exit(0 if ok else 3)'
   echo "Probing the image's own model files for patch compatibility..."
-  if ! docker run --rm --entrypoint python "$IMAGE" -c "$PROBE_CMD"; then
+  if ! docker run --rm --entrypoint $PYBIN "$IMAGE" -c "$PROBE_CMD"; then
     die "the image's vLLM model files do not match what patches/mimo_v2_hotsplit.py expects.
 The patches replace load_weights / process_weights_after_loading wholesale; if those methods are
 missing or renamed in this build the mount will break the model. Either use PATCH_MODEL_FILES=0
@@ -241,7 +254,7 @@ for mod in ["vllm.model_executor.models.mimo_v2","vllm.model_executor.models.mim
         h=hashlib.sha256(open(s.origin,"rb").read()).hexdigest()
         print(f"{h}  {s.origin}")'
   echo "Original module SHA-256 (for provenance; compare with your known-good list):"
-  docker run --rm --entrypoint python "$IMAGE" -c "$HASH_CMD" || true
+  docker run --rm --entrypoint $PYBIN "$IMAGE" -c "$HASH_CMD" || true
   MOUNTS+=(
     -v "$RECIPE/patches/mimo_v2_hotsplit.py:$SITE/vllm/model_executor/models/mimo_v2.py:ro"
     -v "$RECIPE/patches/mimo_v2_omni.py:$SITE/vllm/model_executor/models/mimo_v2_omni.py:ro"
