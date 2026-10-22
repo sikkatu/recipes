@@ -335,7 +335,11 @@ def test_launcher_requires_pinned_image_and_key():
     digest, API_KEY is required even on loopback (unless ALLOW_NO_AUTH=1)."""
     launcher = (BASE / "mimo-v2.6-pro-hotsplit" / "scripts" / "run-tp4-hotsplit.sh").read_text()
     assert 'IMAGE must be pinned by digest' in launcher
-    assert 'API_KEY is required' in launcher
+    # the auth contract: a non-loopback bind is refused without a key; the key is
+    # auto-generated and persisted for loopback (never an unauthenticated public API)
+    assert 'refusing a non-loopback bind' in launcher
+    assert 'failed to generate an API key' in launcher
+    assert 'api_key' in launcher
     # MODEL_REVISION required when the model is fetched by id
     assert 'MODEL_REVISION' in launcher
 

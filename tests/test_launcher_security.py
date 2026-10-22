@@ -45,8 +45,10 @@ def test_api_key_required_by_default(slug):
         text = p.read_text()
         assert "API_KEY" in text, f"{p}: API key handling missing"
         assert "ALLOW_NO_AUTH" in text, f"{p}: no explicit opt-out gate for auth"
-        # a non-loopback bind without a key must be refused
+        # a non-loopback bind without a key must be refused; a loopback bind without a key
+        # must be auto-generated and persisted (never left unauthenticated)
         assert "refusing a non-loopback bind" in text
+        assert "api_key" in text and "gen_key" in text, f"{p}: no persisted auto-generated key"
 
 
 @pytest.mark.parametrize("slug", RECIPES)
@@ -111,9 +113,14 @@ def test_exactly_one_revision_and_no_duplicate_checks():
             assert text.count("--revision") == 1, f"{p}: --revision must appear exactly once"
             assert text.count("IMAGE must be pinned") == 1, f"{p}: duplicate IMAGE check"
             assert text.count("MODEL_REVISION is required") == 1, f"{p}: duplicate revision check"
-            # count only the real die() guard, not the explanatory comment above it
-            guards = [ln for ln in text.splitlines() if "API_KEY is required" in ln and "die" in ln]
-            assert len(guards) == 1, f"{p}: expected exactly 1 auth die(), got {len(guards)}"
+            # auth guards: exactly one non-loopback refusal and exactly one auto-generation
+            # failure guard -- never duplicated (a second copy means a stale re-check)
+            refusal = [ln for ln in text.splitlines() if "die" in ln and "refusing a non-loopback bind" in ln]
+            genfail = [ln for ln in text.splitlines() if "die" in ln and "failed to generate an API key" in ln]
+            assert len(refusal) == 1, f"{p}: expected exactly 1 non-loopback refusal, got {len(refusal)}"
+            assert len(genfail) == 1, f"{p}: expected exactly 1 key-generation failure guard, got {len(genfail)}"
+            # the contract in code comments: auto-generation is loopback-only
+            assert "auto-generated" in text and "LOOPBACK" in text, f"{p}: key contract comment missing"
 
 
 def test_no_port_publish_under_host_networking():

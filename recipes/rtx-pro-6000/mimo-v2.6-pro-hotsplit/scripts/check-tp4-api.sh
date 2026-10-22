@@ -4,12 +4,21 @@
 # usage: check-tp4-api.sh [base-url]   (default http://127.0.0.1:30007)
 set -Eeuo pipefail
 BASE="${1:-${BASE:-http://127.0.0.1:30007}}"
+# the launcher persists its auto-generated key in live/api_key -- use it when the shell has none
+if [ -z "${API_KEY:-}" ]; then
+  for _kf in "live/api_key" "$PWD/live/api_key" "$(dirname "$0")/../live/api_key"; do
+    if [ -f "$_kf" ]; then
+      API_KEY="$(head -n1 "$_kf" | tr -d '[:space:]')"
+      break
+    fi
+  done
+fi
 AUTH=()
 if [ -n "${API_KEY:-}" ]; then
   AUTH=(-H "Authorization: Bearer $API_KEY")
 else
-  echo "NOTE: API_KEY is not set. If the server requires auth (the default), these requests" >&2
-  echo "      will get 401/403. Export API_KEY first, or run the server with ALLOW_NO_AUTH=1" >&2
+  echo "NOTE: no API key found (shell, tp4.env or live/api_key). If the server requires" >&2
+  echo "      auth (the default), these requests will get 401/403." >&2
   echo "      on loopback only." >&2
 fi
 echo "== /v1/models =="

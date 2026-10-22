@@ -24,6 +24,15 @@ ROOT="$(cd "$HERE/.." && pwd)"
 CONTAINER="${CONTAINER:-mimo-pro-tp4-hotsplit}"
 BASELINE_CONTAINER="${BASELINE_CONTAINER:-mimo-pro-tp4-uva}"
 BASE="${BASE:-http://127.0.0.1:30007}"
+# the launcher persists its auto-generated key in live/api_key -- use it when the shell has none
+if [ -z "${API_KEY:-}" ]; then
+  for _kf in "live/api_key" "$PWD/live/api_key" "$(dirname "$0")/../live/api_key"; do
+    if [ -f "$_kf" ]; then
+      API_KEY="$(head -n1 "$_kf" | tr -d '[:space:]')"
+      break
+    fi
+  done
+fi
 
 # Seed settings from ./tp4.env. Values already in the environment WIN over the file:
 # the file is applied only for names that are not already set (parameter expansion).
@@ -73,14 +82,15 @@ case "$cmd" in
     if [ -n "${API_KEY:-}" ]; then
       CURL_AUTH=(-H "Authorization: Bearer $API_KEY")
     fi
-    code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "${CURL_AUTH[@]}" "$BASE/v1/models" 2>/dev/null || echo 000)"
+    code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "${CURL_AUTH[@]}" "$BASE/v1/models" 2>/dev/null)"
+    case "$code" in 000|"") code=000 ;; esac
     case "$code" in
       200) echo "  reachable (authenticated)" ;;
       401|403)
         if [ -n "${API_KEY:-}" ]; then
           echo "  reachable but REJECTED our key (HTTP $code) -- API_KEY mismatch"
         else
-          echo "  reachable but REQUIRES a key (HTTP $code) -- set API_KEY in this shell or tp4.env"
+          echo "  reachable but REQUIRES a key (HTTP $code) -- set API_KEY or use the key in live/api_key"
         fi ;;
       000) echo "  not reachable (server down, still starting, or wrong BASE)" ;;
       *)   echo "  unexpected HTTP $code from $BASE/v1/models" ;;

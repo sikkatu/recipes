@@ -22,6 +22,27 @@ die(){ echo "ERROR: $*" >&2; exit 1; }
 BIND="${BIND:-127.0.0.1}"
 API_KEY="${API_KEY:-}"
 ALLOW_NO_AUTH="${ALLOW_NO_AUTH:-0}"
+# --- API key handling ---------------------------------------------------------------------------
+# The key is persisted in live/api_key (chmod 600, gitignored) and reused across restarts.
+# On a LOOPBACK bind with no key one is auto-generated -- the user never exports anything.
+# On any OTHER bind an explicit key is MANDATORY and never auto-generated (fail-safe: a
+# server on a routable address is always authenticated). ALLOW_NO_AUTH=1 is accepted ONLY
+# together with a proven loopback bind (127.0.0.1 or ::1).
+LIVE_DIR="${LIVE_DIR:-$PWD/live}"
+KEY_FILE="$LIVE_DIR/api_key"
+mkdir -p "$LIVE_DIR"
+if [ -z "$API_KEY" ] && [ -f "$KEY_FILE" ]; then
+  API_KEY="$(head -n1 "$KEY_FILE" | tr -d '[:space:]')"
+fi
+gen_key() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 24
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import secrets; print(secrets.token_hex(24))'
+  else
+    head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \\n'; echo
+  fi
+}
 # Order matters: a non-loopback bind ALWAYS requires a key, even with ALLOW_NO_AUTH=1.
 # ALLOW_NO_AUTH=1 only permits an unauthenticated loopback listener (closed debug loop).
 # Loopback is strictly 127.0.0.1 or ::1 (optionally bracketed). Everything else -- including
@@ -43,9 +64,22 @@ if [ -z "$API_KEY" ]; then
   if [ "$ALLOW_NO_AUTH" = "1" ] && [ "$LOOPBACK" = "1" ]; then
     echo "WARNING: running WITHOUT auth on loopback only (ALLOW_NO_AUTH=1) -- closed debug loop."
   else
-    die "API_KEY is required (the API has no auth otherwise). Export a key (e.g. API_KEY=\$(openssl rand -hex 24)).
-ALLOW_NO_AUTH=1 is accepted ONLY together with a proven loopback bind (127.0.0.1 or ::1)."
+    API_KEY="$(gen_key)"
+    case "$API_KEY" in
+      *[!0-9a-f]*|'') die "failed to generate an API key (openssl/python3/urandom all unavailable)" ;;
+    esac
+    [ "${#API_KEY}" -ge 32 ] || die "generated API key is too short (${#API_KEY} chars)"
+    umask 077
+    printf '%s\n' "$API_KEY" > "$KEY_FILE"
+    chmod 600 "$KEY_FILE"
+    echo "API key auto-generated for the loopback server and saved to $KEY_FILE"
+    echo "(not printed here; check-tp4-api.sh and manage.sh read it automatically)."
   fi
+fi
+if [ -n "$API_KEY" ] && [ ! -f "$KEY_FILE" ]; then
+  umask 077
+  printf '%s\n' "$API_KEY" > "$KEY_FILE"
+  chmod 600 "$KEY_FILE"
 fi
 
 # --- contract: image digests, always (no :latest, no floating tags) -------------------------------
@@ -142,6 +176,16 @@ WAIT_TRIES="${WAIT_TRIES:-180}"
 WAIT_SLEEP="${WAIT_SLEEP:-10}"   # readiness polls, 10s apart (tests override this)
 echo "Waiting up to $((WAIT_TRIES * 10)) seconds for API readiness (docker logs -f $CONTAINER)..."
 for _ in $(seq 1 "$WAIT_TRIES"); do
+  # fail fast: if the container died, waiting cannot help -- show why and stop now
+  RUN_STATE="$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' "$CONTAINER" 2>/dev/null || echo gone)"
+  case "$RUN_STATE" in
+    running*) : ;;
+    *)
+      echo "ERROR: container $CONTAINER is not running ($RUN_STATE) -- the server never started." >&2
+      echo "Last logs:" >&2
+      docker logs --tail 250 "$CONTAINER" >&2 || true
+      exit 1 ;;
+  esac
   if curl -fsS -H "Authorization: Bearer $API_KEY" "http://${BIND/::1/[::1]}:$PORT/v1/models" >/tmp/glm-flash-models.json; then
     cat /tmp/glm-flash-models.json; echo
     curl -fsS -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
