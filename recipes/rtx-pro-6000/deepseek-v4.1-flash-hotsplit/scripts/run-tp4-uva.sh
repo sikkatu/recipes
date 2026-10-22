@@ -107,8 +107,8 @@ CONTAINER="${CONTAINER:-deepseek-flash-tp4-uva}"
 PORT="${PORT:-30007}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-16384}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-1}"
-CPU_OFFLOAD_GB="${CPU_OFFLOAD_GB:-96}"
-GPU_UTIL="${GPU_UTIL:-0.90}"
+CPU_OFFLOAD_GB="${CPU_OFFLOAD_GB:-72}"
+GPU_UTIL="${GPU_UTIL:-0.85}"
 HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
 HOTSPLIT_COUNTS="${HOTSPLIT_COUNTS:-/w/expert_hist_mix.json}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -119,6 +119,20 @@ command -v curl >/dev/null || die "curl missing."
 N="$(nvidia-smi -L | wc -l | tr -d ' ')"
 [ "$N" = 4 ] || die "Expected 4 GPUs, found $N."
 docker container inspect "$CONTAINER" >/dev/null 2>&1 && die "Container already exists: $CONTAINER"
+# --- host RAM preflight: pinned UVA memory is TP x CPU_OFFLOAD_GB and is unswappable ------
+# With 4 ranks the host must hold ALL of it plus room to stream the checkpoint shards.
+# Warn (not fail: the kernel page cache can absorb some slack) when the budget looks too tight.
+TOTAL_RAM_KB="$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+AVAIL_RAM_KB="$(awk '/MemAvailable/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+PINNED_GIB=$((CPU_OFFLOAD_GB * 4))
+NEED_GIB=$((PINNED_GIB + 24))
+AVAIL_GIB=$((AVAIL_RAM_KB / 1024 / 1024))
+if [ "$TOTAL_RAM_KB" -gt 0 ] && [ "$AVAIL_GIB" -lt "$NEED_GIB" ]; then
+  echo "WARNING: host RAM looks tight for UVA offload." >&2
+  echo "  pinned (4 x CPU_OFFLOAD_GB=$CPU_OFFLOAD_GB) = ${PINNED_GIB} GiB + ~24 GiB load buffer = ${NEED_GIB} GiB needed" >&2
+  echo "  currently available: ${AVAIL_GIB} GiB. Loading a large checkpoint may hit the OOM killer." >&2
+  echo "  Give the VM more RAM (e.g. 800 GiB for MiMo at CPU_OFFLOAD_GB=128) or lower CPU_OFFLOAD_GB." >&2
+fi
 mkdir -p "$HF_CACHE" "$LIVE_DIR"
 
 MODEL_ARG="$MODEL_ID"

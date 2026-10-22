@@ -310,6 +310,33 @@ def test_shard_fp8_qkv_rows_with_torch():
         assert torch.allclose(got, expect), f"rank {tp_rank}: gathered rows differ from selection"
 
 
+def test_uva_offload_default_covers_expert_bank():
+    """Real-world finding (first 4-GPU run): CPU_OFFLOAD_GB=96 < per-rank expert bank
+    (~123 GiB for MiMo) left ~27 GiB of experts in VRAM and the Marlin-format conversion
+    OOMed. The default MUST cover the per-rank bank of each recipe, and GPU_UTIL must
+    leave VRAM headroom for that conversion."""
+    expect = {
+        "mimo-v2.6-pro-hotsplit": 123,
+        "glm-5.3-hotsplit": 95,
+        "deepseek-v4.1-flash-hotsplit": 67,
+        "glm-5.3-flash-hotsplit": 40,
+    }
+    for slug, bank in expect.items():
+        for p in sorted((BASE / slug / "scripts").glob("run-tp4-*.sh")):
+            text = p.read_text()
+            import re
+            m = re.search(r'CPU_OFFLOAD_GB="\$\{CPU_OFFLOAD_GB:-(\d+)\}"', text)
+            assert m, f"{p}: CPU_OFFLOAD_GB default missing"
+            default = int(m.group(1))
+            assert default >= bank, \
+                f"{p}: CPU_OFFLOAD_GB default {default} < per-rank expert bank {bank} GiB -- experts stay in VRAM and Marlin conversion OOMs"
+            gm = re.search(r'GPU_UTIL="\$\{GPU_UTIL:-([0-9.]+)\}"', text)
+            assert gm and float(gm.group(1)) <= 0.85, \
+                f"{p}: GPU_UTIL default must be <= 0.85 (VRAM headroom for the Marlin conversion)"
+            assert "host RAM preflight" in text, \
+                f"{p}: no host-RAM preflight for pinned UVA memory (4 x CPU_OFFLOAD_GB)"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
 
