@@ -200,24 +200,32 @@ if [ "$PATCH_MODEL_FILES" = 1 ]; then
   #    override (load_weights, process_weights_after_loading, the MoE apply path) before we
   #    mount over them. A mismatch means the patches were written for a different vLLM build.
   # 3. Log the originals' SHA-256 for provenance (compare with a known-good list in the log).
-  DETECT_CMD='import importlib.util,sys
+  # find_spec("vllm") returns the PACKAGE dir (.../dist-packages/vllm). The patch mount targets
+  # $SITE/vllm/model_executor/models/, so SITE must be the site-packages ROOT (the parent).
+  # The path only exists INSIDE the container -- validate it there, never with [ -d ] on the host.
+  DETECT_CMD='import importlib.util,os,sys
 s=importlib.util.find_spec("vllm")
 if s is None:
     sys.exit("vllm package not found inside the image")
 locs=list(s.submodule_search_locations or [])
-print(locs[0] if locs else s.origin)'
+pkg = locs[0] if locs else os.path.dirname(s.origin)
+site = os.path.dirname(pkg)   # .../site-packages/vllm -> .../site-packages
+if not os.path.isdir(os.path.join(site, "vllm")):
+    sys.exit("site-packages root has no vllm/: " + site)
+print(site)'
   if [ -z "$SITE" ]; then
     PYBIN=python3
     docker run --rm --entrypoint python3 "$IMAGE" -c 'import sys; print(sys.version)' >/dev/null 2>&1 || PYBIN=python
-    SITE_OUT="$(docker run --rm --entrypoint $PYBIN "$IMAGE" -c "$DETECT_CMD" 2>&1)"       || die "failed to detect vLLM site-packages inside the image (entrypoint=$PYBIN).
+    SITE_OUT="$(docker run --rm --entrypoint $PYBIN "$IMAGE" -c "$DETECT_CMD" 2>&1)" || true
+    SITE="$(printf '%s\n' "$SITE_OUT" | tail -n1 | tr -d '\r' | sed 's/[[:space:]]*$//')"
+    case "$SITE" in
+      /*/site-packages|/*/dist-packages) : ;;
+      *) die "failed to detect vLLM site-packages inside the image (entrypoint=$PYBIN).
 Probe output:
 $SITE_OUT
-Set SITE= explicitly to skip the probe (the path is /usr/local/lib/python3.12/dist-packages in the pinned image)." 
-    SITE="$(tail -n1 <<<"$SITE_OUT" | tr -d '')"
-    [ -n "$SITE" ] && [ -d "$SITE" ] || die "empty or non-directory vLLM site-packages path detected: '$SITE'.
-Probe output:
-$SITE_OUT
-Set SITE= explicitly." 
+Expected a site-packages root such as /usr/local/lib/python3.12/dist-packages.
+Set SITE= explicitly to skip the probe." ;;
+    esac
   fi
   echo "SITE (auto-detected or overridden): $SITE"
   # compatibility probe: the image's own files must expose the API our patches override
