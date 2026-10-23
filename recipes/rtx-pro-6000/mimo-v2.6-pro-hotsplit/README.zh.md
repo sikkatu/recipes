@@ -3,11 +3,12 @@
 
 **状态：已在目标硬件上验证（2026-10-22）。** UVA 基线（`run-tp4-uva.sh`）在 4-GPU 主机上端到端运行：
 权重加载正常，API 有响应，生成连贯（相对原版模型加载器的 A/B 已确认）。
-`run-tp4-hotsplit.sh` 已用 `HOTSPLIT_DRYRUN=1` + `MOE_BACKEND=humming` 验证（可启动，补丁/probe 路径有效）。
-**完整** hotsplit 在 humming 上 2026-10-23 完成了权重加载并拆分了全部 69 层，随后触发 humming
-部分库断言（`fused_humming_moe.py:441` 的 `w1.size(0) == num_experts`）；该断言现已由
-`patches/hotsplit.py::_patch_humming_bank`（每库专家计数 + 从权重推导问题尺寸）修复。
-Marlin 重打包路径仍会 OOM（见“已知限制”）。humming 库上的输出质量仍是实验性的 —— 使用前请验证。
+`run-tp4-hotsplit.sh` 在 `MOE_BACKEND=humming` 下**已在目标硬件上端到端工作（2026-10-23）**：
+全部 69 层在 4 个 rank 上拆分（hot 库在 GPU，cold 库在 UVA），服务器启动，smoke 测试返回
+连贯输出（`TP4_OK`，`finish_reason: stop`）。为此修复了三个库格式 bug —— 每库专家计数
+（`c6dfb58`）、每库 `LayerConfig`（`dataclasses.replace(cfg, num_experts=n_rows)`）和每库 scales
+（`32d3373`）—— 见 `patches/hotsplit.py::_patch_humming_bank`。Marlin 重打包路径仍会 OOM
+（见“已知限制”）。输出质量已通过 smoke 验证；投产前请做更长的质量检查。
 
 目标主机：4× RTX PRO 6000 Blackwell Workstation Edition —— 每卡 96 GB GDDR7 带 ECC
 （1792 GB/s）。卡是 PCIe Gen 5，但本机主机插槽协商为 **PCIe 4.0**，GPU↔主机链路为 Gen 4
