@@ -62,6 +62,23 @@ def node_cpus(node: int, sysfs: str = "/sys") -> list[int]:
         return []
 
 
+def map_from_env(index: int) -> int:
+    """HOTSPLIT_NUMA_MAP='0:0,1:0,2:1,3:1' -> node for this GPU, or -1 if no entry.
+    This is the fallback for VMs where /sys reports numa_node=-1 for every PCI device."""
+    raw = os.environ.get("HOTSPLIT_NUMA_MAP", "")
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if ":" not in pair:
+            continue
+        g, n = pair.split(":", 1)
+        try:
+            if int(g.strip()) == index:
+                return int(n.strip())
+        except ValueError:
+            continue
+    return -1
+
+
 def set_mempolicy(node: int, mode: int = MPOL_PREFERRED) -> bool:
     nr = _SYSCALL_SET_MEMPOLICY.get(platform.machine())
     if nr is None:
@@ -91,8 +108,18 @@ def bind_for_device(index: int):
     addr = pci_addr(getattr(props, "pci_domain_id", 0), bus, getattr(props, "pci_device_id", 0))
     node = gpu_numa_node(addr)
     if node < 0:
-        _log(f"cuda:{index} {addr}: numa_node unknown (single-node host?); not binding")
-        return False, "numa_node unknown"
+        # VMs (Proxmox etc.) report numa_node=-1 even on multi-socket hosts: the PCI NUMA
+        # topology is not passed through. Allow an explicit GPU->node map so the binding is
+        # possible when the user knows the topology: HOTSPLIT_NUMA_MAP="0:0,1:0,2:1,3:1".
+        node = map_from_env(index)
+        if node < 0:
+            _log(f"cuda:{index} {addr}: numa_node unknown (VM without PCI NUMA topology?) and no "
+                 f"HOTSPLIT_NUMA_MAP entry for gpu {index}; not binding. For a dual-socket VM set "
+                 f"HOTSPLIT_NUMA_MAP='0:0,1:0,2:1,3:1' (gpu:node pairs) and check with numactl --hardware.")
+            return False, "numa_node unknown"
+        _log(f"cuda:{index} {addr} -> node {node} (from HOTSPLIT_NUMA_MAP; sysfs numa_node=-1)")
+    else:
+        _log(f"cuda:{index} {addr} -> node {node} (from sysfs)")
     cpus = node_cpus(node)
     if cpus:
         os.sched_setaffinity(0, set(cpus))

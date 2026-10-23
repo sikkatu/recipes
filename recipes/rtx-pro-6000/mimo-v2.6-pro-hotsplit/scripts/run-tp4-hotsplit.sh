@@ -353,7 +353,8 @@ ENVS=(
   -e "HOTSPLIT_DYNAMIC=$HOTSPLIT_DYNAMIC"
   -e "HOTSPLIT_ALLOW_STATIC_FALLBACK=$HOTSPLIT_ALLOW_STATIC_FALLBACK"
   -e "HOTSPLIT_HOST_FLOOR_GIB=$HOTSPLIT_HOST_FLOOR_GIB"
-  -e "HOTSPLIT_NUMA=$HOTSPLIT_NUMA"
+  -e "HOTSPLIT_NUMA=$HOTSPLIT_NUMA" \
+  -e "HOTSPLIT_NUMA_MAP=${HOTSPLIT_NUMA_MAP:-}" \
   -e "HOTSPLIT_NUMA_POLICY=$HOTSPLIT_NUMA_POLICY"
   -e "HOTSPLIT_BOOT_HOOK=$BOOT_HOOK"
   -e HOTSPLIT_LIVE_COUNTS=/live/counts.json
@@ -398,6 +399,7 @@ docker run -d --name "$CONTAINER" --restart no \
   --reasoning-parser mimo \
   --tool-call-parser mimo \
   --enable-auto-tool-choice \
+  --enable-metrics \
   --host "$BIND" --port "$PORT"
 
 # URL host for the readiness probes: bracket IPv6, probe wildcard binds via loopback

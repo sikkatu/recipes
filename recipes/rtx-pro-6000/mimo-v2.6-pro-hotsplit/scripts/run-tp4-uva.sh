@@ -276,6 +276,7 @@ docker run -d --name "$CONTAINER" --restart no \
   --reasoning-parser mimo \
   --tool-call-parser mimo \
   --enable-auto-tool-choice \
+  --enable-metrics \
   --host "$BIND" --port "$PORT"
 # URL host for the readiness probes: bracket IPv6, probe wildcard binds via loopback
 case "$BIND" in
