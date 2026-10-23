@@ -105,6 +105,23 @@ def _is_uva(p: torch.Tensor) -> bool:
     return bool(getattr(p, "_vllm_is_uva_offloaded", False))
 
 
+def _rows_copy_(dst: torch.Tensor, slots: torch.Tensor, src: torch.Tensor) -> None:
+    """dst[slots] = src, in-place. Float8_e8m0fnu (MXFP4 scales) has no CUDA kernel for
+    index_copy_ (observed 2026-10-23: NotImplementedError). 1-byte non-integer tensors
+    are viewed as uint8 for the copy; every other dtype uses the fast path."""
+    if dst.element_size() == 1 and dst.dtype not in (torch.uint8, torch.int8, torch.bool):
+        dst.view(torch.uint8).index_copy_(0, slots, src.view(torch.uint8))
+    else:
+        dst.index_copy_(0, slots, src)
+
+
+def _rows_select(src: torch.Tensor, ids: torch.Tensor) -> torch.Tensor:
+    """src[ids] copy. Same Float8 workaround as _rows_copy_."""
+    if src.element_size() == 1 and src.dtype not in (torch.uint8, torch.int8, torch.bool):
+        return src.view(torch.uint8).index_select(0, ids).view(src.dtype)
+    return src.index_select(0, ids)
+
+
 def _gather_rows(w: torch.Tensor, ids: torch.Tensor, chunk: int = 16) -> torch.Tensor:
     """GPU-memory copy of w[ids] (w may be a UVA view; reads stream over PCIe)."""
     out = torch.empty((ids.numel(),) + tuple(w.shape[1:]), dtype=w.dtype, device=_dev())
@@ -576,10 +593,10 @@ class _Dyn:
         old_rows = []  # (dl, slots, hw13_rows, hw2_rows, hs13_rows, hs2_rows)
         for dl, slots, new in staged:
             old_rows.append((dl, slots,
-                             dl.hw13.index_select(0, slots),   # index_select/advanced indexing already copy
-                             dl.hw2.index_select(0, slots),
-                             dl.hs13.index_select(0, slots),
-                             dl.hs2.index_select(0, slots)))
+                             _rows_select(dl.hw13, slots),
+                             _rows_select(dl.hw2, slots),
+                             _rows_select(dl.hs13, slots),
+                             _rows_select(dl.hs2, slots)))
         old_hv = self.emap_hot[t_hr, t_hc]
         old_cv = self.emap_cold[t_cr, t_cc]
         # Order the swap stream only NOW: every snapshot above is enqueued on the compute
@@ -591,10 +608,10 @@ class _Dyn:
             self.update_state = "COPYING"
             with (swap_ctx if swap_ctx is not None else _null_ctx()):
                 for dl, slots, new in staged:
-                    dl.hw13.index_copy_(0, slots, dl.c13.index_select(0, new))
-                    dl.hw2.index_copy_(0, slots, dl.c2.index_select(0, new))
-                    dl.hs13.index_copy_(0, slots, dl.s13.index_select(0, new))
-                    dl.hs2.index_copy_(0, slots, dl.s2.index_select(0, new))
+                    _rows_copy_(dl.hw13, slots, _rows_select(dl.c13, new))
+                    _rows_copy_(dl.hw2, slots, _rows_select(dl.c2, new))
+                    _rows_copy_(dl.hs13, slots, _rows_select(dl.s13, new))
+                    _rows_copy_(dl.hs2, slots, _rows_select(dl.s2, new))
                 if use_stream:
                     ev = torch.cuda.Event()
                     ev.record(stream)
@@ -617,10 +634,10 @@ class _Dyn:
             try:
                 with (swap_ctx if swap_ctx is not None else _null_ctx()):
                     for dl, slots, w13, w2, s13, s2 in old_rows:
-                        dl.hw13.index_copy_(0, slots, w13)
-                        dl.hw2.index_copy_(0, slots, w2)
-                        dl.hs13.index_copy_(0, slots, s13)
-                        dl.hs2.index_copy_(0, slots, s2)
+                        _rows_copy_(dl.hw13, slots, w13)
+                        _rows_copy_(dl.hw2, slots, w2)
+                        _rows_copy_(dl.hs13, slots, s13)
+                        _rows_copy_(dl.hs2, slots, s2)
                     self.emap_hot[t_hr, t_hc] = old_hv
                     self.emap_cold[t_cr, t_cc] = old_cv
                     if use_stream:

@@ -752,3 +752,20 @@ def test_model_dir_default_is_in_home_not_root():
             t = p.read_text()
             assert 'export MODEL_DIR="/models/' not in t, f"wiki/{p.name}: MODEL_DIR at filesystem root"
             assert '$HOME/models' in t or '~/models' in t, f"wiki/{p.name}: home-dir default missing"
+
+# ===================================== Float8_e8m0fnu indexing workaround (2026-10-23)
+def test_row_copy_helpers_workaround_float8_index():
+    """MXFP4 scales are Float8_e8m0fnu (1 byte). PyTorch has no CUDA kernel for index_copy_
+    on that dtype (observed on target hardware: NotImplementedError 'index_copy_cuda' not
+    implemented for 'Float8_e8m0fnu'). Commit and rollback must go through _rows_copy_ /
+    _rows_select which view 1-byte non-integer tensors as uint8 -- never call index_copy_
+    directly on a scale tensor."""
+    assert "def _rows_copy_" in SOURCE, "Float8 workaround helper missing"
+    assert "def _rows_select" in SOURCE, "Float8 workaround helper missing"
+    commit = _fn_text("commit")
+    assert "_rows_copy_" in commit, "commit must copy rows via _rows_copy_"
+    assert "_rows_select" in commit, "commit must select rows via _rows_select"
+    assert "index_copy_" not in commit.replace("_rows_copy_", ""), \
+        "commit must not call index_copy_ directly on tensors"
+    # the snapshot block must use the same workaround
+    assert "_rows_select(dl.hs13, slots)" in commit
