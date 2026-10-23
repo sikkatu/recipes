@@ -280,7 +280,8 @@ esac
 MODELS_JSON="$(mktemp /tmp/tp4-models.XXXXXX.json)"
 WAIT_TRIES="${WAIT_TRIES:-180}"
 WAIT_SLEEP="${WAIT_SLEEP:-10}"   # readiness polls, 10s apart (tests override this)
-echo "Waiting up to $((WAIT_TRIES * 10)) seconds for API readiness. Progress prints every ${WAIT_SLEEP}s:"
+echo "Waiting up to $((WAIT_TRIES * 10)) seconds for API readiness. Progress prints every ${WAIT_SLEEP}s (new log lines only):"
+LOG_SHOWN=0
 START_TS="$(date +%s)"
 for _ in $(seq 1 "$WAIT_TRIES"); do
   # fail fast: if the container died, waiting cannot help -- show why and stop now
@@ -293,10 +294,23 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
       docker logs --tail 250 "$CONTAINER" >&2 || true
       exit 1 ;;
   esac
-  # progress line every poll: tells the user the server is alive and what it is doing
+  # progress line every poll: print only NEW log lines (a repeated identical line every
+  # 10s reads as a hang); when nothing new, say so instead of reprinting the same text.
   ELAPSED=$(( $(date +%s) - START_TS ))
-  LASTLOG="$(docker logs --tail 400 "$CONTAINER" 2>&1 | grep -E 'Loading|loaded|weights|safetensors|offload|Ready|Starting|server|UVA|memory' | tail -1 | cut -c1-110 || true)"
-  printf '[%3ds] container=%s  %s\n' "$ELAPSED" "${RUN_STATE%% *}" "${LASTLOG:-starting...}"
+  LOG_ALL="$(docker logs "$CONTAINER" 2>&1)"
+  LOG_TOTAL="$(printf '%s\n' "$LOG_ALL" | wc -l)"
+  NEW_COUNT=0
+  if [ "$LOG_TOTAL" -gt "${LOG_SHOWN:-0}" ]; then
+    NEW_COUNT=$(( LOG_TOTAL - LOG_SHOWN ))
+    printf '%s\n' "$LOG_ALL" | tail -n "$NEW_COUNT" | grep -E 'Loading|loaded|weights|safetensors|offload|Ready|Starting|server|UVA|compile|graph|CUDA|ERROR|WARNING' | cut -c1-120 || true
+    LOG_SHOWN="$LOG_TOTAL"
+  fi
+  if [ "$NEW_COUNT" -eq 0 ]; then
+    LASTLOG="$(printf '%s\n' "$LOG_ALL" | grep -E 'Loading|loaded|weights|safetensors|offload|Ready|Starting|server|UVA|compile|graph|CUDA' | tail -1 | cut -c1-90 || true)"
+    printf '[%3ds] container=%s  still working (no new lines yet; last: %s)\n' "$ELAPSED" "${RUN_STATE%% *}" "${LASTLOG:-starting...}"
+  else
+    printf '[%3ds] container=%s  %d new log line(s)\n' "$ELAPSED" "${RUN_STATE%% *}" "$NEW_COUNT"
+  fi
   if curl -fsS --max-time 3 -H "Authorization: Bearer $API_KEY" "http://$URLHOST:$PORT/v1/models" > "$MODELS_JSON" 2>/dev/null; then
     cat "$MODELS_JSON"; echo
     curl -fsS -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \

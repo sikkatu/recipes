@@ -63,7 +63,6 @@ validated end-to-end, treat the image choice as an experiment:
 - The launcher checks that some expected methods exist in the mounted vLLM sources before
   launching (SITE probe), but this is a smoke test, not a compatibility proof: signatures,
   sharding internals and Marlin kernel expectations are NOT verified automatically.
-- Record the digest you validated in `results/<run-id>/` so the next run is reproducible.
 
 Do **not** assume a random tag "just works" - verify on your hardware first.
 

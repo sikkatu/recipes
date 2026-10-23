@@ -114,7 +114,8 @@ echo
 echo "---- last dynamic updates (growth here = the dynamic counter really moves) ----"
 grep "hotsplit dynamic update" <<<"$L" | tail -5
 n_updates="$(grep -c "hotsplit dynamic update" <<<"$L")"
-echo "total dynamic updates logged: $n_updates (0 is only OK if no generation has happened yet)"
+echo "total dynamic updates logged: $n_updates (one planning window = ${HOTSPLIT_DYN_STEPS:-2000} engine steps;"
+echo "      a few short requests cannot produce an update: generate a few thousand tokens first)"
 echo
 echo "---- GPU memory ----"
 nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv
@@ -135,6 +136,7 @@ if [ "$MODE" = "dynamic" ]; then
       if [ "$EXPECT_PROGRESS" = "1" ]; then
         echo "FAIL  dynamic mode: planner ran ${plans_seen}x but 0 swaps committed, and the caller"
         echo "      asserts real traffic already ran (expect-progress). Dynamic adaptation is not working."
+        echo "      (One planning window = ${HOTSPLIT_DYN_STEPS:-2000} engine steps: send more tokens to rule out too-few-steps.)"
         fail=1
       else
         echo "WARN  dynamic mode: planner ran ${plans_seen}x but 0 swaps committed."
