@@ -8,7 +8,7 @@
 连贯输出（`TP4_OK`，`finish_reason: stop`）。为此修复了三个库格式 bug —— 每库专家计数
 （`c6dfb58`）、每库 `LayerConfig`（`dataclasses.replace(cfg, num_experts=n_rows)`）和每库 scales
 （`32d3373`）—— 见 `patches/hotsplit.py::_patch_humming_bank`。Marlin 重打包路径仍会 OOM
-（见“已知限制”）。输出质量已通过 smoke 验证；投产前请做更长的质量检查。
+（见“已知限制”）。**Dynamic 模式也已在目标硬件上验证（2026-10-23）**：在 `HOTSPLIT_DYNAMIC=1` 下，热集合跟随实时路由 —— 约 6700 个引擎 step 内 3 个规划窗口、3 次事务性更新（每次更新在 69 层中交换 138 个专家，每次 43–74 毫秒，`errors=0`），10 个不同主题的流量测试中热库命中率 42.2%，10 个回答全部连贯。步进钩子在两种 GPUModelRunner 实现（V1 与 V2）上都会触发，交换路径通过 uint8 视图处理 MXFP4 的 `Float8_e8m0fnu` scales。输出质量已通过 smoke 验证；投产前请做更长的质量检查。
 
 目标主机：4× RTX PRO 6000 Blackwell Workstation Edition —— 每卡 96 GB GDDR7 带 ECC
 （1792 GB/s）。卡是 PCIe Gen 5，但本机主机插槽协商为 **PCIe 4.0**，GPU↔主机链路为 Gen 4
@@ -207,6 +207,9 @@ MiMo-V2.6-Pro 在 69 个 MoE 层中的每一层从 384 个专家中路由 8 个�
 - 计数器包含捕获批次的填充槽位（在 `--max-num-seqs 1` 时可忽略，以上会略有偏差）。
 - 4 个 worker 同时锁定数百 GiB 主机内存；请保持 `HOTSPLIT_HOST_FLOOR_GIB` 充足（启动脚本默认 128）。
 - 不支持 EP。此处未测试投机解码。
+- **NUMA 绑定在此主机上无效（2026-10-23）。** Proxmox VM 未向客户机暴露 GPU 的 NUMA 拓扑（`/sys/bus/pci/devices/*/numa_node` 返回 `-1`），因此 `numa_bind` 打印 `numa_node unknown; not binding` 并跳过绑定。在单节点主机上没有代价：所有卡共享同一内存控制器。在多路服务器上绑定很重要 —— 用 `numactl --hardware` 检查拓扑。
+- **Prefix caching 默认开启**（固定 vLLM 构建中 `enable_prefix_caching=True`）。重复的请求前缀（系统提示、对话历史）从 KV 缓存提供 —— 这就是云服务商的"便宜缓存 token"机制。验证：`scripts/check-prefix-cache.sh` —— 发送相同长前缀请求两次，打印第二个响应中的 `cached_tokens`。
+- **1M token 上下文**（`MAX_MODEL_LEN=1048576`）由模型配置支持（`max_position_embeddings=1048576`，9 个全注意力层 + 61 个滑动窗口层）。TP4 下 KV 开销：使用 `--kv-cache-dtype fp8` 时约 6.9 GiB/卡。已验证算术和配置，未做 1M token 实测。长上下文建议：`--kv-cache-dtype fp8` + `--max-num-batched-tokens 8192`。
 
 ## 回退
 
