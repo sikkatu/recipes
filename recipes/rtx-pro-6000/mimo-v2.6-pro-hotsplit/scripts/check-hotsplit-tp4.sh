@@ -27,7 +27,7 @@ chk(){ # label, regex, expected count (default >=1)
   if [ "$n" -ge "${3:-1}" ]; then echo "PASS  $1 ($n)"; else echo "MISS  $1 ($n, expected >= ${3:-1})"; fail=1; fi
 }
 echo "== engine =="
-chk "Marlin MXFP4 backend selected"           "MARLIN"
+chk "MXFP4 MoE backend selected"                "Using .(MARLIN|HUMMING|TRITON|DEEPGEMM|FLASHINFER|CUTLASS|B12X|CPU).*Mxfp4 MoE backend"
 chk "UVA offload active"                      "Total CPU offloaded parameters"
 echo
 echo "== hook status (every requested hook must be ACTIVE; FAILED is a hard miss) =="
@@ -41,7 +41,11 @@ if grep -q "HOOK STATUS boot_hook=FAILED" <<<"$L"; then
 fi
 echo
 echo "== hotsplit stages =="
-chk "hotsplit plan pass logged on every rank"      "hotsplit dynamic plan pass #.*\[rank [0-9]/4\]" 4
+if [ "$MODE" = "static" ]; then
+  chk "hotsplit plan logged on every rank (static)"    "hotsplit plan \\[rank [0-9]/4\\]" 4
+else
+  chk "hotsplit plan pass logged on every rank (dynamic)" "hotsplit dynamic plan pass #.*\\[rank [0-9]/4\\]" 4
+fi
 chk "hotsplit finished on every rank"         "hotsplit done \[rank [0-9]/4\]" 4
 echo
 echo "== dynamic mode (MODE=$MODE) =="
@@ -102,7 +106,7 @@ chk "live counter registered"                 "hotsplit live counter"
 echo
 echo "== per-layer memory telemetry =="
 chk "per-layer VRAM peak logged"              "hotsplit mem \[rank" 1
-chk "per-layer release check logged"          "hotsplit release \[rank" 1
+chk "per-layer release check logged"          "hotsplit release (static|dynamic|\\[rank)" 1
 echo
 echo "---- warnings worth reading ----"
 grep -E "hotsplit.*(warning|WARNING|host floor|not importable|failed|skipped)|HOOK STATUS.*FAILED|HOTSPLIT_NUMA.*(NOT set|not binding|skipped|failed)|expert parallelism is active" <<<"$L" | tail -20
