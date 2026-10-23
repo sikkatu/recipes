@@ -1,6 +1,6 @@
 """hotsplit for tensor-parallel workstations: per-expert GPU-residency for UVA-offloaded MXFP4/Marlin MoE.
 
-AUTHORED, NOT RUN ON TARGET HARDWARE. Derived from an earlier single-GPU hotsplit (TP=1, static). Drop-in
+VERIFIED on target hardware in static mode (2026-10-23); dynamic mode not yet hardware-verified. Derived from an earlier single-GPU hotsplit (TP=1, static). Drop-in
 replacement: the patched mimo_v2.py hook does `from hotsplit import apply_hotsplit`, so mounting this file as
 /w/hotsplit.py is all the model side needs.
 
@@ -82,7 +82,11 @@ def _tp_info() -> tuple[int, int]:
         )
 
         return int(get_tensor_model_parallel_rank()), int(get_tensor_model_parallel_world_size())
-    except Exception:
+    except Exception as e:
+        # Do NOT swallow silently: if every rank falls back here they all write the same
+        # counts file and all log [rank 0/4], corrupting per-rank telemetry.
+        logger.warning("hotsplit: could not determine TP rank (%r); assuming rank 0 of 1. "
+                       "Per-rank logs and live-counts files may be wrong.", e)
         return 0, 1
 
 
@@ -649,8 +653,9 @@ class _Dyn:
         self.last_update_at = time.time()
         if self.log_updates:
             _sync()
-            logger.info("hotsplit dynamic update #%d at step %d: %d swaps in %d layers, %.0f ms",
-                        self.updates, self.steps, n, len(plans), 1000 * (time.time() - t0))
+            logger.info("hotsplit dynamic update #%d at step %d: %d swaps in %d layers, %.0f ms %s",
+                        self.updates, self.steps, n, len(plans), 1000 * (time.time() - t0),
+                        getattr(self, "tag", ""))
             self.log_hit_rates(n, time.time() - t0)
 
     def log_hit_rates(self, swapped_rows: int, secs: float) -> None:
@@ -689,10 +694,10 @@ class _Dyn:
                 # traffic this split implies on the host link
                 logger.info(
                     "hotsplit dynamic hit-rate: hot %d / cold %d of %d routed rows (%.1f%% hot, "
-                    "%.1f%% cold -> PCIe); %d rows swapped in %.0f ms",
+                    "%.1f%% cold -> PCIe); %d rows swapped in %.0f ms %s",
                     hot_hits, cold_hits, total,
                     100.0 * hot_hits / total, 100.0 * cold_hits / total,
-                    swapped_rows, 1000 * secs)
+                    swapped_rows, 1000 * secs, getattr(self, "tag", ""))
         except Exception as e:  # telemetry must never take the lane down
             logger.warning("hotsplit dynamic hit-rate telemetry failed: %r", e)
 
@@ -769,16 +774,46 @@ def _dynamic_hook_decision(hook_installed: bool, dynamic_requested: bool, allow_
 
 
 def _install_step_hook(dyn: _Dyn) -> bool:
-    try:
-        from vllm.v1.worker.gpu_model_runner import GPUModelRunner
-    except Exception as e:
-        logger.warning("hotsplit dynamic: GPUModelRunner not importable (%r); running as static hotsplit", e)
+    """Wrap execute_model on EVERY GPUModelRunner class the build ships.
+
+    The pinned vLLM has two implementations (V1: vllm.v1.worker.gpu_model_runner,
+    V2: vllm.v1.worker.gpu.model_runner) and the worker picks one via use_v2_model_runner.
+    Wrapping only V1 leaves a V2 run with a dead planner: plan_passes stays 0 while the
+    install-time log still claims dynamic_hook=ACTIVE. So wrap both; a module that does
+    not exist in this build is simply skipped.
+    """
+    import importlib
+    targets = []
+    for mod_name in ("vllm.v1.worker.gpu_model_runner", "vllm.v1.worker.gpu.model_runner"):
+        try:
+            cls = getattr(importlib.import_module(mod_name), "GPUModelRunner")
+        except Exception:
+            continue
+        if getattr(cls, "_hotsplit_wrapped", False):
+            targets.append(f"{mod_name} (already)")
+            continue
+        _wrap_runner(dyn, cls)
+        targets.append(mod_name)
+    if not targets:
+        logger.warning("hotsplit dynamic: no GPUModelRunner class found to wrap; running as static hotsplit")
         return False
-    if getattr(GPUModelRunner, "_hotsplit_wrapped", False):
-        return True
-    orig = GPUModelRunner.execute_model
+    logger.info("hotsplit dynamic: step hook installed on %s (update every %d steps, <=%d swaps/layer, margin %.2f)",
+                ", ".join(targets), dyn.every, dyn.max_swaps, dyn.margin)
+    return True
+
+
+def _wrap_runner(dyn: _Dyn, cls) -> None:
+    orig = cls.execute_model
     @functools.wraps(orig)
     def wrapped(self, *args, **kwargs):
+        if not getattr(dyn, "_fired_logged", False):
+            # Proof of life: the hook is in the hot path only once this line is in the log.
+            # live_buf=MISSING means the live counter never finalized, so plan() will return
+            # early forever -- that is a setup bug, not "too early to judge".
+            dyn._fired_logged = True
+            live = _LIVE
+            logger.info("hotsplit dynamic: step hook FIRED (first engine step seen; live_buf=%s)",
+                        "ready" if (live is not None and live.buf is not None) else "MISSING")
         plans = None
         try:
             plans = dyn.plan()
@@ -797,11 +832,8 @@ def _install_step_hook(dyn: _Dyn) -> bool:
             dyn.commit(plans)  # deliberately not wrapped: a failure after the copy must be loud
         return orig(self, *args, **kwargs)
 
-    GPUModelRunner.execute_model = wrapped
-    GPUModelRunner._hotsplit_wrapped = True
-    logger.info("hotsplit dynamic: step hook installed (update every %d steps, <=%d swaps/layer, margin %.2f)",
-                dyn.every, dyn.max_swaps, dyn.margin)
-    return True
+    cls.execute_model = wrapped
+    cls._hotsplit_wrapped = True
 
 
 # --------------------------------------------------------------------------------------------------

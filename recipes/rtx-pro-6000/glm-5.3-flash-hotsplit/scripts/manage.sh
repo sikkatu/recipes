@@ -41,6 +41,7 @@ if [ -f "$ROOT/tp4.env" ]; then
     case "$line" in
       ''|'#'*) continue ;;                 # skip blanks and comments
     esac
+    line="${line#export }"                  # allow 'export X=1' without gluing it into the name
     name="${line%%=*}"
     [ "$name" = "$line" ] && continue       # not an assignment
     name="$(printf '%s' "$name" | tr -d ' ')"
@@ -50,6 +51,10 @@ if [ -f "$ROOT/tp4.env" ]; then
       # strip inline comment: everything after " # " or trailing " #..."
       val="${val%% #*}"
       val="${val%"${val##*[![:space:]]}"}"   # strip trailing whitespace
+      val="${val//\"/}"                       # strip surrounding double quotes if any
+      case "$val" in
+        *'$HOME'*|*'${HOME}'*) val="${val//\$HOME/$HOME}"; val="${val//\$\{HOME\}/$HOME}" ;;
+      esac
       export "$name=$val"
     fi
   done < "$ROOT/tp4.env"
@@ -187,10 +192,14 @@ case "$cmd" in
     else
       echo "NOTE: check-hotsplit-tp4.sh is not shipped in this recipe (degrade gracefully)."
       echo "      Checking API health instead:"
-      exec bash "$HERE/check-tp4-api.sh" 2>/dev/null || {
+      # no `exec` here: exec replaces the shell, making the fallback below unreachable and a
+      # missing script exits 127 with errors silenced. Run it in-place, keep the fallback honest.
+      if [ -f "$HERE/check-tp4-api.sh" ]; then
+        bash "$HERE/check-tp4-api.sh"
+      else
         echo "      check-tp4-api.sh also missing; basic curl check:"
         curl -s -m 5 -H "Authorization: Bearer ${API_KEY:-}" "${BASE:-http://127.0.0.1:30007}/v1/models" || true
-      }
+      fi
     fi
     ;;
   *)

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # MiMo-V2.6-Pro on 4x RTX PRO 6000: vLLM TP4 + UVA expert offload + hotsplit (static or dynamic hot experts).
-# PARTIALLY VERIFIED (2026-10-22): HOTSPLIT_DRYRUN=1 + MOE_BACKEND=humming boots; the FULL Marlin run still OOMs at repack. Read ../README.md first.
+# VERIFIED (2026-10-23) on target hardware with MOE_BACKEND=humming (static split). Dynamic mode: not yet verified (watch for 'step hook FIRED' in the log). Marlin + UVA still OOMs at repack. Read ../README.md first.
 set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
 
@@ -29,7 +29,7 @@ gen_key() {
   elif command -v python3 >/dev/null 2>&1; then
     python3 -c 'import secrets; print(secrets.token_hex(24))'
   else
-    head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \\n'; echo
+    head -c 24 /dev/urandom | od -An -tx1 | tr -d '[:space:]'; echo
   fi
 }
 # Order matters: a non-loopback bind ALWAYS requires a key, even with ALLOW_NO_AUTH=1.
@@ -143,6 +143,9 @@ docker container inspect "$CONTAINER" >/dev/null 2>&1 && die "Container already 
 # Warn (not fail: the kernel page cache can absorb some slack) when the budget looks too tight.
 TOTAL_RAM_KB="$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
 AVAIL_RAM_KB="$(awk '/MemAvailable/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+case "$CPU_OFFLOAD_GB" in
+  ''|*[!0-9]*) echo "ERROR: CPU_OFFLOAD_GB must be a whole number of GiB, got '${CPU_OFFLOAD_GB}'" >&2; exit 1 ;;
+esac
 PINNED_GIB=$((CPU_OFFLOAD_GB * 4))
 NEED_GIB=$((PINNED_GIB + 24))
 AVAIL_GIB=$((AVAIL_RAM_KB / 1024 / 1024))
@@ -436,10 +439,18 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
   fi
   if curl -fsS --max-time 3 -H "Authorization: Bearer $API_KEY" "http://$URLHOST:$PORT/v1/models" > "$MODELS_JSON" 2>/dev/null; then
     cat "$MODELS_JSON"; echo
-    curl -fsS -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+    SMOKE_JSON="$(curl -fsS -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
       "http://$URLHOST:$PORT/v1/chat/completions" \
-      -d '{"model":"mimo-pro","messages":[{"role":"user","content":"Reply exactly TP4_OK"}],"max_tokens":64,"temperature":0}'
-    echo
+      -d '{"model":"mimo-pro","messages":[{"role":"user","content":"Reply exactly TP4_OK"}],"max_tokens":64,"temperature":0}')"
+    echo "$SMOKE_JSON"
+    # the answer must actually contain TP4_OK: HTTP 200 + a coherent-looking body is not
+    # proof of correct weights (the stock loader produced garbage that looked plausible)
+    if printf '%s' "$SMOKE_JSON" | grep -q '"content":"[^"]*TP4_OK'; then
+      echo "smoke test: answer contains TP4_OK -- model output verified"
+    else
+      echo "ERROR: smoke answer does NOT contain TP4_OK -- weights may be loaded wrong" >&2
+      echo "       (compare with a run using PATCH_MODEL_FILES=1; see README Known limits)" >&2
+    fi
     echo "Now run: $HERE/check-hotsplit-tp4.sh $CONTAINER"
     exit 0
   fi

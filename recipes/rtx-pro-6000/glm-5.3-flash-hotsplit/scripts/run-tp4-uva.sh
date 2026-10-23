@@ -138,6 +138,9 @@ docker container inspect "$CONTAINER" >/dev/null 2>&1 && die "Container already 
 # Warn (not fail: the kernel page cache can absorb some slack) when the budget looks too tight.
 TOTAL_RAM_KB="$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
 AVAIL_RAM_KB="$(awk '/MemAvailable/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+case "$CPU_OFFLOAD_GB" in
+  ''|*[!0-9]*) echo "ERROR: CPU_OFFLOAD_GB must be a whole number of GiB, got '${CPU_OFFLOAD_GB}'" >&2; exit 1 ;;
+esac
 PINNED_GIB=$((CPU_OFFLOAD_GB * 4))
 NEED_GIB=$((PINNED_GIB + 24))
 AVAIL_GIB=$((AVAIL_RAM_KB / 1024 / 1024))
@@ -184,6 +187,7 @@ docker run -d --name "$CONTAINER" --restart no \
   --offload-backend uva \
   --cpu-offload-gb "$CPU_OFFLOAD_GB" \
   --cpu-offload-params routed_experts.w13_weight routed_experts.w2_weight \
+  --moe-backend "$MOE_BACKEND" \
   --max-model-len "$MAX_MODEL_LEN" \
   --max-num-seqs "$MAX_NUM_SEQS" \
   --max-num-batched-tokens 1024 \

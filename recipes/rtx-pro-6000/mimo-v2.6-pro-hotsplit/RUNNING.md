@@ -30,7 +30,7 @@ docker stop mimo-pro-tp4-uva
 API: `http://SERVER_IP:30007/v1`. Do not expose publicly without authentication/firewalling.
 
 ## Hotsplit (static / dynamic hot experts)
-`scripts/run-tp4-hotsplit.sh` launches the same server with per-expert GPU-residency, optional dynamic updates and NUMA pinning. It is authored but **not run on target hardware**; start with `HOTSPLIT_DRYRUN=1` and read [README.md](README.md) and `tp4.env.example` first. Check a running container with `scripts/check-hotsplit-tp4.sh`.
+`scripts/run-tp4-hotsplit.sh` launches the same server with per-expert GPU-residency, optional dynamic updates and NUMA pinning. It **runs end-to-end on target hardware (static mode verified 2026-10-23)**; dynamic mode is not yet verified (the step hook must log `step hook FIRED` on hardware). Start with `HOTSPLIT_DRYRUN=1` and read [README.md](README.md) and `tp4.env.example` first. Check a running container with `scripts/check-hotsplit-tp4.sh`.
 
 ## Before trusting PATCH_MODEL_FILES=1 (whole-file model replacement)
 

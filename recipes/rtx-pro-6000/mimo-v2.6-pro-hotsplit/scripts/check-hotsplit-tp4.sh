@@ -91,15 +91,15 @@ echo "== dynamic metrics (per rank from logs) =="
 # hook status, planner passes, planner errors, committed swaps, last update time, hit rate.
 for r in 0 1 2 3; do
   hook="$(grep -Eo "\\[rank $r/4\\].*dynamic_hook=[A-Z]+" <<<"$L" | grep -Eo 'dynamic_hook=[A-Z]+' | tail -1)"
-  passes="$(grep -c "\\[rank $r/4\\].*hotsplit dynamic plan pass #" <<<"$L" || true)"
-  commits="$(grep -Eo "hotsplit dynamic update #[0-9]+" <<<"$L" | wc -l)"
+  passes="$(grep -c "hotsplit dynamic plan pass #.*\\[rank $r/4\\]" <<<"$L" || true)"
+  commits="$(grep -c "hotsplit dynamic update #.*\\[rank $r/4\\]" <<<"$L" || true)"
   perr="$(grep -Ec "planning failed|commit failed" <<<"$L" || true)"
   last="$(grep -Eo "hotsplit dynamic update #[0-9]+ at step [0-9]+" <<<"$L" | tail -1)"
   hr="$(grep -Eo "hot [0-9]+ / cold [0-9]+ of [0-9]+ routed rows \\([0-9.]+% hot" <<<"$L" | tail -1 | grep -Eo '[0-9.]+% hot')"
   printf "  rank %s: hook=%s plan_passes=%s commits=%s errors=%s last=[%s] hit=%s\n" \
     "$r" "${hook:-NONE}" "$passes" "$commits" "$perr" "${last:-none}" "${hr:-n/a}"
 done
-echo "  NOTE: commits is the global update count (shared across ranks)."
+echo "  NOTE: commits/plans are per rank (the update line carries the rank tag since the fix)."
 echo
 echo "== live counter =="
 chk "live counter registered"                 "hotsplit live counter"
