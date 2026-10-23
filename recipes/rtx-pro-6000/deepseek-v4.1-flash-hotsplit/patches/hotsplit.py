@@ -281,11 +281,49 @@ def _free_full_params(layer, w13, w2, free_scales: bool) -> None:
     _sync()
 
 
+def _patch_humming_bank(kern, n_rows: int) -> None:
+    """Make a humming experts object accept a partial (bank) weight set.
+
+    Humming's moe_problem_size asserts w1.size(0) == meta.num_experts, where meta is the
+    LayerConfig built at conversion time for the FULL expert count (e.g. 384). A hotsplit
+    bank holds only len(ids) rows, so the assert fires (observed 2026-10-23 on target
+    hardware: AssertionError at fused_humming_moe.py:441). Marlin has no such check -- it
+    derives E from w1.size(0) -- which is why the same bank code worked on Marlin.
+
+    HummingIndexedExperts is non-batched (Standard format): num_experts does NOT enter
+    buffer sizing (get_buffer_metas uses M/topk only), and estimate_local_valid_shape_m
+    uses it only for kernel-tuning selection. So setting the per-bank expert count and
+    deriving E from the weight tensor in moe_problem_size is safe and sufficient."""
+    fe = getattr(kern, "fused_experts", None)
+    if fe is None or not hasattr(fe, "humming_configs"):
+        return   # not a humming experts object -- Marlin etc. need no patch
+    fe.num_experts = n_rows
+
+    def _bank_problem_size(a1, w1, w2, topk_ids):
+        meta1 = fe.humming_configs["w13"]
+        meta2 = fe.humming_configs["w2"]
+        e = w1.size(0)                 # derive from the ACTUAL bank tensor, not the config
+        assert w2.size(0) == e, f"bank w2 rows {w2.size(0)} != w1 rows {e}"
+        top_k = topk_ids.size(1)
+        if not fe.is_batched():
+            num_tokens = a1.size(0)
+            assert topk_ids.size(0) == num_tokens
+        else:
+            assert a1.dim() == 3 and a1.size(0) == e
+            num_tokens = a1.size(1)
+        intermediate_dim = meta2.shape_k - meta2.pad_shape_k
+        hidden_dim = meta1.shape_k - meta1.pad_shape_k
+        return e, num_tokens, intermediate_dim, hidden_dim, top_k
+
+    fe.moe_problem_size = _bank_problem_size
+
+
 def _make_bank(layer, qm, make_kernel, make_qcfg, w13, w2, s13, s2, emap):
     qcfg = make_qcfg(mxfp4_backend=qm.mxfp4_backend, w1_scale=s13, w2_scale=s2,
                      swiglu_limit=getattr(layer, "swiglu_limit", None), layer=layer)
     kern = make_kernel(moe_quant_config=qcfg, moe_config=qm.moe, experts_cls=qm.experts_cls,
                        mxfp4_backend=qm.mxfp4_backend, routing_tables=layer._expert_routing_tables())
+    _patch_humming_bank(kern, w13.size(0))
     return kern, w13, w2, emap
 
 

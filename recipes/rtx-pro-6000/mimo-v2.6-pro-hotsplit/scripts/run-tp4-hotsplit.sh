@@ -331,9 +331,10 @@ if [ -z "$HOTSPLIT_HOT_GIB" ] && [ "$HOTSPLIT_DRYRUN" != "1" ]; then
   echo "  Set HOTSPLIT_HOT_GIB to the number of GiB per rank you want hot (e.g. 20-50)." >&2
 fi
 if [ "$MOE_BACKEND" != "marlin" ] && [ "$HOTSPLIT_DRYRUN" != "1" ]; then
-  echo "WARNING: the full hotsplit bank construction is written against Marlin kernels." >&2
-  echo "  MOE_BACKEND=$MOE_BACKEND bypasses the Marlin repack (good for VRAM), but humming's" >&2
-  echo "  quant-config API reads scales from the layer, not per bank -- verify output before use." >&2
+  echo "NOTE: the full hotsplit bank construction is written against Marlin kernels." >&2
+  echo "  MOE_BACKEND=$MOE_BACKEND bypasses the Marlin repack (good for VRAM). The humming" >&2
+  echo "  per-bank expert-count patch (patches/hotsplit.py::_patch_humming_bank) handles the" >&2
+  echo "  partial-bank assert; output is still experimental -- verify quality before use." >&2
 fi
 ENVS=(
   -e HF_HOME=/root/.cache/huggingface

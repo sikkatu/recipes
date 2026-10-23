@@ -3,7 +3,7 @@
 > **English** | [Русский](README.ru.md) | [中文](README.zh.md)
 
 
-**Status: VERIFIED on target hardware (2026-10-22).** The UVA baseline (`run-tp4-uva.sh`) runs end-to-end on the 4-GPU host: weights load, the API answers, and generation is coherent (A/B-confirmed against the stock model loader). `run-tp4-hotsplit.sh` was exercised with `HOTSPLIT_DRYRUN=1` + `MOE_BACKEND=humming` (boots, patch/probe path works). The FULL hotsplit run (Marlin repack) is **not yet verified** — it still OOMs during the repack (see Known limits).
+**Status: VERIFIED on target hardware (2026-10-22).** The UVA baseline (`run-tp4-uva.sh`) runs end-to-end on the 4-GPU host: weights load, the API answers, and generation is coherent (A/B-confirmed against the stock model loader). `run-tp4-hotsplit.sh` was exercised with `HOTSPLIT_DRYRUN=1` + `MOE_BACKEND=humming` (boots, patch/probe path works). The FULL hotsplit run on humming got past weight loading and split all 69 layers on 2026-10-23, then hit a humming partial-bank assert (`w1.size(0) == num_experts` in `fused_humming_moe.py:441`); that assert is now fixed by `patches/hotsplit.py::_patch_humming_bank` (per-bank expert count + weight-derived problem size). The Marlin repack path still OOMs (see Known limits). Output quality on humming banks is still EXPERIMENTAL — verify before use.
 
 Target host: 4× RTX PRO 6000 Blackwell Workstation Edition — 96 GB GDDR7 with ECC each (1792 GB/s per card). The cards are PCIe Gen 5, but in this machine the host slots train at **PCIe 4.0**, so the GPU-to-host link is Gen 4 (~25 GB/s per GPU); host RAM is DDR4. No NVLink. The CPU is whatever the machine reports (`lscpu`, `/proc/meminfo`).
 
