@@ -139,7 +139,10 @@ command -v curl >/dev/null || die "curl missing."
 command -v sha256sum >/dev/null || die "sha256sum missing."
 N="$(nvidia-smi -L | wc -l | tr -d ' ')"
 [ "$N" = 4 ] || die "Expected 4 GPUs, found $N."
-docker container inspect "$CONTAINER" >/dev/null 2>&1 && die "Container already exists: $CONTAINER"
+if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
+  echo "NOTE: removing leftover container $CONTAINER from a previous run..."
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || die "could not remove $CONTAINER — remove it manually (docker rm -f $CONTAINER)"
+fi
 # --- host RAM preflight: pinned UVA memory is TP x CPU_OFFLOAD_GB and is unswappable ------
 # With 4 ranks the host must hold ALL of it plus room to stream the checkpoint shards.
 # Warn (not fail: the kernel page cache can absorb some slack) when the budget looks too tight.
@@ -399,7 +402,6 @@ docker run -d --name "$CONTAINER" --restart no \
   --reasoning-parser mimo \
   --tool-call-parser mimo \
   --enable-auto-tool-choice \
-  --enable-metrics \
   --host "$BIND" --port "$PORT"
 
 # URL host for the readiness probes: bracket IPv6, probe wildcard binds via loopback
