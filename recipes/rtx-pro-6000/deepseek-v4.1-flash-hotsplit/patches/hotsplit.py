@@ -281,24 +281,39 @@ def _free_full_params(layer, w13, w2, free_scales: bool) -> None:
     _sync()
 
 
-def _patch_humming_bank(kern, n_rows: int) -> None:
+def _patch_humming_bank(kern, n_rows: int, s13, s2) -> None:
     """Make a humming experts object accept a partial (bank) weight set.
 
-    Humming's moe_problem_size asserts w1.size(0) == meta.num_experts, where meta is the
-    LayerConfig built at conversion time for the FULL expert count (e.g. 384). A hotsplit
-    bank holds only len(ids) rows, so the assert fires (observed 2026-10-23 on target
-    hardware: AssertionError at fused_humming_moe.py:441). Marlin has no such check -- it
-    derives E from w1.size(0) -- which is why the same bank code worked on Marlin.
-
-    HummingIndexedExperts is non-batched (Standard format): num_experts does NOT enter
-    buffer sizing (get_buffer_metas uses M/topk only), and estimate_local_valid_shape_m
-    uses it only for kernel-tuning selection. So setting the per-bank expert count and
-    deriving E from the weight tensor in moe_problem_size is safe and sufficient."""
+    Two things are wrong for a bank of n_rows experts instead of the full 384:
+      1. humming's LayerConfig carries num_experts=384 and the C++ launcher checks
+         expected_shape[0] == weight.size(0) (observed 2026-10-23: '97 != 384').
+         LayerConfig is a dataclass -> rebuild per bank with dataclasses.replace.
+      2. humming_forward reads weight_scale from quant_config (property w1_scale over
+         _w1.scale), which get_humming_moe_quant_config filled from the FULL layer
+         scales. Point _w1.scale/_w2.scale at the bank's own sliced scales (s13/s2).
+    moe_problem_size additionally derives E from the actual weight tensor.
+    Marlin needs none of this (it derives E from w1.size(0) and takes scales as args).
+    """
+    import dataclasses as _dc
     fe = getattr(kern, "fused_experts", None)
     if fe is None or not hasattr(fe, "humming_configs"):
         return   # not a humming experts object -- Marlin etc. need no patch
     fe.num_experts = n_rows
-
+    # 1) per-bank LayerConfig (serialized to C++; expected_shape comes from num_experts)
+    for sub in ("w13", "w2"):
+        cfg = fe.humming_configs[sub]
+        fe.humming_configs[sub] = _dc.replace(cfg, num_experts=n_rows)
+    # 2) per-bank scales: w1_scale/w2_scale are properties over _w1.scale/_w2.scale
+    qc = getattr(fe, "quant_config", None)
+    if qc is not None:
+        for desc_name, tens in (("_w1", s13), ("_w2", s2)):
+            desc = getattr(qc, desc_name, None)
+            if desc is not None and hasattr(desc, "scale"):
+                try:
+                    desc.scale = tens
+                except Exception:
+                    pass
+    # 3) derive E from the actual bank tensor in moe_problem_size
     def _bank_problem_size(a1, w1, w2, topk_ids):
         meta1 = fe.humming_configs["w13"]
         meta2 = fe.humming_configs["w2"]
@@ -323,7 +338,7 @@ def _make_bank(layer, qm, make_kernel, make_qcfg, w13, w2, s13, s2, emap):
                      swiglu_limit=getattr(layer, "swiglu_limit", None), layer=layer)
     kern = make_kernel(moe_quant_config=qcfg, moe_config=qm.moe, experts_cls=qm.experts_cls,
                        mxfp4_backend=qm.mxfp4_backend, routing_tables=layer._expert_routing_tables())
-    _patch_humming_bank(kern, w13.size(0))
+    _patch_humming_bank(kern, w13.size(0), s13, s2)
     return kern, w13, w2, emap
 
 
