@@ -59,10 +59,3 @@ recipes/<hardware>/<recipe>/
 ## Attribution
 
 These recipes are the product of substantial hands-on work on real hardware. If you use this repository — its recipes, measurements, write-ups or documentation — in your own work, please **consider referencing it**: linking `https://github.com/sikkatu/recipes` (and the specific recipe page) where you publish derived results helps others find the source. This is a request, not a license condition. Issues and corrections are welcome.
-
-## Verify locally
-
-```bash
-uv venv .venv && uv pip install -p .venv/bin/python jsonschema pyyaml pytest numpy
-.venv/bin/python -m pytest tests -q && .venv/bin/python scripts/check_recipe.py --all
-```

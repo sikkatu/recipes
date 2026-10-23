@@ -126,7 +126,7 @@ HOTSPLIT_COUNTS="${HOTSPLIT_COUNTS:-/w/expert_hist_mix.json}"
 HOTSPLIT_WEIGHTS="${HOTSPLIT_WEIGHTS:-decode=1,prefill=0}"
 HOTSPLIT_HOT_GIB="${HOTSPLIT_HOT_GIB:-}"      # per rank; empty = same GPU-memory bytes as the stock placement
 HOTSPLIT_DRYRUN="${HOTSPLIT_DRYRUN:-0}"
-HOTSPLIT_DYNAMIC="${HOTSPLIT_DYNAMIC:-0}"        # 0 = static (safe default); 1 = dynamic hot set
+HOTSPLIT_DYNAMIC="${HOTSPLIT_DYNAMIC:-1}"        # 1 = dynamic hot set (default, verified 2026-10-23); 0 = static
 HOTSPLIT_ALLOW_STATIC_FALLBACK="${HOTSPLIT_ALLOW_STATIC_FALLBACK:-0}"
 HOTSPLIT_HOST_FLOOR_GIB="${HOTSPLIT_HOST_FLOOR_GIB:-128}"
 HOTSPLIT_NUMA="${HOTSPLIT_NUMA:-1}"

@@ -57,9 +57,3 @@ recipes/<hardware>/<recipe>/
 ## Атрибуция
 
 Эти рецепты — результат большой работы на реальном железе. Если вы используете этот репозиторий — рецепты, замеры, разборы или документацию — в своей работе, **пожалуйста, ссылайтесь на него**: указание `https://github.com/sikkatu/recipes` (и страницы конкретного рецепта) в публикуемых результатах помогает другим найти источник. Это просьба, а не условие лицензии. Замечания и правки приветствуются.
-
-## Локальная проверка
-```bash
-uv venv .venv && uv pip install -p .venv/bin/python jsonschema pyyaml pytest numpy
-.venv/bin/python -m pytest tests -q && .venv/bin/python scripts/check_recipe.py --all
-```
