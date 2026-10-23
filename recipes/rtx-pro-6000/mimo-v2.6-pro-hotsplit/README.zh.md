@@ -106,33 +106,69 @@ TRT-LLM NVFP4 内核编写的，而 copy-engine 变体（每未命中的 DMA 加
 
 ## 启动
 
-先运行 preflight 并检查四张 GPU 报告合理的 NUMA 节点：
+所有命令均可直接复制。请在 `recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/` 目录下执行。
+
+### 1. Preflight
 
 ```bash
 bash scripts/preflight-tp4.sh
 ```
 
-首次启动，仅规划（不移动权重，服务器作为原版 UVA 基线运行；每个 rank 应看到一行
-`hotsplit plan [rank N/4]`）：
+### 2. UVA 基线（无 hot/cold 拆分）
 
 ```bash
-MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD HOTSPLIT_DRYRUN=1 MAX_MODEL_LEN=16384 scripts/run-tp4-hotsplit.sh
+export MODEL_DIR="$HOME/models/MiMo-V2.6-Pro-MOPD"
+export IMAGE="vllm/vllm-openai:nightly-8e2beaa3bff595577a069d49d96bde9074294ec2@sha256:167ccd8696bc09f1b63301185134e04b883623f8adcbd8e3a0ec3140a193abcf"
+export MAX_MODEL_LEN=16384 CPU_OFFLOAD_GB=128 GPU_UTIL=0.85
+bash scripts/run-tp4-uva.sh
+```
+
+启动后（约 13 分钟）：
+```bash
+bash scripts/check-tp4-api.sh
+```
+
+### 3. Hotsplit（static，2026-10-23 已验证）
+
+先停止基线（同一端口）：
+```bash
+docker stop mimo-pro-tp4-uva && docker rm mimo-pro-tp4-uva
+```
+
+然后启动 hotsplit。`HOTSPLIT_HOT_GIB` **必须设置**：完整 UVA 卸载时默认预算是 0（空 hot 集合 —— 静默无操作）。每 rank 30 GiB 是安全起点；首次启动后根据剩余显存调整。
+
+```bash
+export MODEL_DIR="$HOME/models/MiMo-V2.6-Pro-MOPD"
+export IMAGE="vllm/vllm-openai:nightly-8e2beaa3bff595577a069d49d96bde9074294ec2@sha256:167ccd8696bc09f1b63301185134e04b883623f8adcbd8e3a0ec3140a193abcf"
+export MAX_MODEL_LEN=16384 CPU_OFFLOAD_GB=128 GPU_UTIL=0.85
+export HOTSPLIT_DYNAMIC=0 HOTSPLIT_HOT_GIB=30
+bash scripts/run-tp4-hotsplit.sh
+```
+
+启动后（约 13 分钟）：
+```bash
+bash scripts/check-hotsplit-tp4.sh mimo-pro-tp4-hotsplit static
+bash scripts/check-tp4-api.sh
+```
+
+### 4. Dynamic 实验（单独运行，质量尚未验证）
+
+```bash
 docker stop mimo-pro-tp4-hotsplit && docker rm mimo-pro-tp4-hotsplit
+export HOTSPLIT_DYNAMIC=1
+bash scripts/run-tp4-hotsplit.sh
 ```
 
-然后真正运行，先 static，后 dynamic：
+### 5. API 请求（质量对比）
 
 ```bash
-MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD HOTSPLIT_DYNAMIC=0 scripts/run-tp4-hotsplit.sh
-scripts/check-hotsplit-tp4.sh
-# 停止，然后：
-MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD HOTSPLIT_DYNAMIC=1 scripts/run-tp4-hotsplit.sh
+KEY="$(cat live/api_key)"
+URL="http://127.0.0.1:30007/v1/chat/completions"
+curl -s "$URL" -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"model":"mimo-pro","messages":[{"role":"user","content":"What is the capital of France? Answer in one sentence."}],"max_tokens":100,"temperature":0}'
 ```
 
-不设 `HOTSPLIT_HOT_GIB` 时，热门预算等于原版放置所用的显存字节数（KV 大小不变）。
-只有在首次启动显示有多少显存空闲之后，才按 rank 设置（45，然后 50、55）。
-按步骤提高 `MAX_MODEL_LEN`（32K、64K、128K），如 `RUNNING.md` 所述。
-
+如需更长的质量对比，在 UVA 基线上执行相同请求并比较 `content` 字段。`temperature=0` 时短的问答应完全一致。
 ## 验证
 
 1. `scripts/check-hotsplit-tp4.sh` —— 每个阶段应为 PASS（在 `HOTSPLIT_DYNAMIC=0` 时

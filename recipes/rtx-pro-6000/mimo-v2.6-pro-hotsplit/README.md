@@ -66,30 +66,72 @@ What this does **not** do: per-token LRU miss filling. A slot-cache design (fuse
 
 ## Launch
 
-Run the preflight first and check that the four GPUs report sensible NUMA nodes:
+All commands are copy-paste ready. Run them from `recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/`.
+
+### 1. Preflight
 
 ```bash
 bash scripts/preflight-tp4.sh
 ```
 
-First boot, plan only (no weights moved, the server runs as the stock UVA baseline; look for one `hotsplit plan [rank N/4]` line per rank):
+### 2. UVA baseline (no hot/cold split)
 
 ```bash
-MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD HOTSPLIT_DRYRUN=1 MAX_MODEL_LEN=16384 scripts/run-tp4-hotsplit.sh
+export MODEL_DIR="$HOME/models/MiMo-V2.6-Pro-MOPD"
+export IMAGE="vllm/vllm-openai:nightly-8e2beaa3bff595577a069d49d96bde9074294ec2@sha256:167ccd8696bc09f1b63301185134e04b883623f8adcbd8e3a0ec3140a193abcf"
+export MAX_MODEL_LEN=16384 CPU_OFFLOAD_GB=128 GPU_UTIL=0.85
+bash scripts/run-tp4-uva.sh
+```
+
+After startup (~13 min):
+```bash
+bash scripts/check-tp4-api.sh
+```
+
+### 3. Hotsplit (static, verified 2026-10-23)
+
+Stop the baseline first (same port):
+```bash
+docker stop mimo-pro-tp4-uva && docker rm mimo-pro-tp4-uva
+```
+
+Then launch hotsplit. `HOTSPLIT_HOT_GIB` is **required** here: with full UVA offload the
+default hot budget is 0 (empty hot set — a silent no-op). 30 GiB per rank is a safe start;
+adjust after the first boot shows how much GPU memory is free.
+
+```bash
+export MODEL_DIR="$HOME/models/MiMo-V2.6-Pro-MOPD"
+export IMAGE="vllm/vllm-openai:nightly-8e2beaa3bff595577a069d49d96bde9074294ec2@sha256:167ccd8696bc09f1b63301185134e04b883623f8adcbd8e3a0ec3140a193abcf"
+export MAX_MODEL_LEN=16384 CPU_OFFLOAD_GB=128 GPU_UTIL=0.85
+export HOTSPLIT_DYNAMIC=0 HOTSPLIT_HOT_GIB=30
+bash scripts/run-tp4-hotsplit.sh
+```
+
+After startup (~13 min):
+```bash
+bash scripts/check-hotsplit-tp4.sh mimo-pro-tp4-hotsplit static
+bash scripts/check-tp4-api.sh
+```
+
+### 4. Dynamic experiment (separate run, not yet quality-verified)
+
+```bash
 docker stop mimo-pro-tp4-hotsplit && docker rm mimo-pro-tp4-hotsplit
+export HOTSPLIT_DYNAMIC=1
+bash scripts/run-tp4-hotsplit.sh
 ```
 
-Then for real, static first, dynamic second:
+### 5. Raw API queries (quality comparison)
 
 ```bash
-MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD HOTSPLIT_DYNAMIC=0 scripts/run-tp4-hotsplit.sh
-scripts/check-hotsplit-tp4.sh
-# stop, then:
-MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD HOTSPLIT_DYNAMIC=1 scripts/run-tp4-hotsplit.sh
+KEY="$(cat live/api_key)"
+URL="http://127.0.0.1:30007/v1/chat/completions"
+curl -s "$URL" -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"model":"mimo-pro","messages":[{"role":"user","content":"What is the capital of France? Answer in one sentence."}],"max_tokens":100,"temperature":0}'
 ```
 
-Without `HOTSPLIT_HOT_GIB` the hot budget equals the GPU-memory bytes the stock placement used (KV size unchanged). Set it per rank (45, then 50, 55) only after the first boot shows how much GPU memory is free. Raise `MAX_MODEL_LEN` in steps (32K, 64K, 128K) as in `RUNNING.md`.
-
+For a longer quality comparison, run the same queries against the UVA baseline and compare
+the `content` fields. `temperature=0` should give identical output for short factual answers.
 ## Verify
 
 1. `scripts/check-hotsplit-tp4.sh` — every stage should PASS (the dynamic-hook line is expected to MISS with `HOTSPLIT_DYNAMIC=0`).
