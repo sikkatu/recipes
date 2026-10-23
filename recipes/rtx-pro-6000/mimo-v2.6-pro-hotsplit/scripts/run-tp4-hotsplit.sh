@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # MiMo-V2.6-Pro on 4x RTX PRO 6000: vLLM TP4 + UVA expert offload + hotsplit (static or dynamic hot experts).
-# VERIFIED (2026-10-23) on target hardware with MOE_BACKEND=humming (static split). Dynamic mode: not yet verified (watch for 'step hook FIRED' in the log). Marlin + UVA still OOMs at repack. Read ../README.md first.
+# VERIFIED (2026-10-23) on target hardware with MOE_BACKEND=humming: static AND dynamic (hit 41.6->45.4%, 6.6 tok/s, output identical to baseline). Marlin + UVA still OOMs at repack. Read ../README.md first.
 set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
 
@@ -126,7 +126,7 @@ HOTSPLIT_COUNTS="${HOTSPLIT_COUNTS:-/w/expert_hist_mix.json}"
 HOTSPLIT_WEIGHTS="${HOTSPLIT_WEIGHTS:-decode=1,prefill=0}"
 HOTSPLIT_HOT_GIB="${HOTSPLIT_HOT_GIB:-}"      # per rank; empty = same GPU-memory bytes as the stock placement
 HOTSPLIT_DRYRUN="${HOTSPLIT_DRYRUN:-0}"
-HOTSPLIT_DYNAMIC="${HOTSPLIT_DYNAMIC:-1}"
+HOTSPLIT_DYNAMIC="${HOTSPLIT_DYNAMIC:-0}"        # 0 = static (safe default); 1 = dynamic hot set
 HOTSPLIT_ALLOW_STATIC_FALLBACK="${HOTSPLIT_ALLOW_STATIC_FALLBACK:-0}"
 HOTSPLIT_HOST_FLOOR_GIB="${HOTSPLIT_HOST_FLOOR_GIB:-128}"
 HOTSPLIT_NUMA="${HOTSPLIT_NUMA:-1}"
@@ -356,8 +356,8 @@ ENVS=(
   -e "HOTSPLIT_DYNAMIC=$HOTSPLIT_DYNAMIC"
   -e "HOTSPLIT_ALLOW_STATIC_FALLBACK=$HOTSPLIT_ALLOW_STATIC_FALLBACK"
   -e "HOTSPLIT_HOST_FLOOR_GIB=$HOTSPLIT_HOST_FLOOR_GIB"
-  -e "HOTSPLIT_NUMA=$HOTSPLIT_NUMA" \
-  -e "HOTSPLIT_NUMA_MAP=${HOTSPLIT_NUMA_MAP:-}" \
+  -e "HOTSPLIT_NUMA=$HOTSPLIT_NUMA"
+  -e "HOTSPLIT_NUMA_MAP=${HOTSPLIT_NUMA_MAP:-}"
   -e "HOTSPLIT_NUMA_POLICY=$HOTSPLIT_NUMA_POLICY"
   -e "HOTSPLIT_BOOT_HOOK=$BOOT_HOOK"
   -e HOTSPLIT_LIVE_COUNTS=/live/counts.json

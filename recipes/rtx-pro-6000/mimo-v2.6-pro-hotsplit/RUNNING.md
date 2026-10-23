@@ -9,7 +9,7 @@ Requirements: Linux, NVIDIA driver, Docker + NVIDIA Container Toolkit, four visi
 
 Run:
 ```bash
-MAX_MODEL_LEN=16384 CPU_OFFLOAD_GB=96 scripts/run-tp4-uva.sh
+MAX_MODEL_LEN=16384 CPU_OFFLOAD_GB=128 scripts/run-tp4-uva.sh
 ```
 For an existing local model:
 ```bash
@@ -30,7 +30,7 @@ docker stop mimo-pro-tp4-uva
 API: `http://SERVER_IP:30007/v1`. Do not expose publicly without authentication/firewalling.
 
 ## Hotsplit (static / dynamic hot experts)
-`scripts/run-tp4-hotsplit.sh` launches the same server with per-expert GPU-residency, optional dynamic updates and NUMA pinning. It **runs end-to-end on target hardware (static mode verified 2026-10-23)**; dynamic mode is not yet verified (the step hook must log `step hook FIRED` on hardware). Start with `HOTSPLIT_DRYRUN=1` and read [README.md](README.md) and `tp4.env.example` first. Check a running container with `scripts/check-hotsplit-tp4.sh`.
+`scripts/run-tp4-hotsplit.sh` launches the same server with per-expert GPU-residency, optional dynamic updates and NUMA pinning. It **runs end-to-end on target hardware: static and dynamic verified 2026-10-23** (dynamic: 3 transactional updates, hot-bank hit rate 41.6->45.4%, 6.6 tok/s, output identical to baseline). Start with `HOTSPLIT_DRYRUN=1` and read [README.md](README.md) and `tp4.env.example` first. Check a running container with `scripts/check-hotsplit-tp4.sh`.
 
 ## Before trusting PATCH_MODEL_FILES=1 (whole-file model replacement)
 
@@ -84,11 +84,12 @@ itself. To measure the actual effect, on the same workload and the same request 
 1. Run static (`HOTSPLIT_DYNAMIC=0`) and dynamic (`HOTSPLIT_DYNAMIC=1`) with identical
    `HOTSPLIT_HOT_GIB`, model revision and sampling params.
 2. Record TTFT and inter-token latency per request (vLLM logs them per request; `nvidia-smi dmon`
-   -s u shows PCIe RX/TX bytes for the card during the run). Cold-bank hits appear as host-link
+   -s t shows PCIe RX/TX bytes (rxpci/txpci) for the card during the run). Cold-bank hits appear as host-link
    traffic; a working dynamic mode moves traffic from the cold path to the hot path over time.
 3. Watch the `hotsplit dynamic hit-rate` log line after each update: it reports hot vs cold
    routed-row split and the swap cost. The hot share should trend up against the offline plan;
-   if it does not, the live traffic differs from `HOTSPLIT_COUNTS` -- re-run `balance.sh`.
+   if it does not, the live traffic differs from `HOTSPLIT_COUNTS` -- rebuild the ranking from
+   your own counters with `python3 patches/hotsplit_rerank.py live/counts.rank*.json`.
 4. Note the live counter includes padded slots of captured batches (`live lane counts incl.
    padded slots` in the snapshot meta). The bias is small at decode sizes but compare static
    and dynamic runs at the same `MAX_NUM_SEQS` and batch shape to cancel it.

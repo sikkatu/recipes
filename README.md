@@ -58,7 +58,7 @@ recipes/<hardware>/<recipe>/
 
 ## Attribution
 
-These recipes are the product of substantial hands-on work on real hardware. If you use this repository — its recipes, measurements, write-ups or documentation — in your own work, **reference it**: link `https://github.com/sikkatu/recipes` (and the specific recipe page) wherever you publish results derived from it. Forks and derived documents must keep this reference. Issues and corrections are welcome; silent copying is not.
+These recipes are the product of substantial hands-on work on real hardware. If you use this repository — its recipes, measurements, write-ups or documentation — in your own work, please **consider referencing it**: linking `https://github.com/sikkatu/recipes` (and the specific recipe page) where you publish derived results helps others find the source. This is a request, not a license condition. Issues and corrections are welcome.
 
 ## Verify locally
 
