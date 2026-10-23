@@ -200,6 +200,8 @@ def _vram_precheck(hot_bytes: int, free_now: int, reserve_gib: float, floor_gib:
     return ok, reserve
 
 
+_release_log: list[tuple[str, int, int, int, int]] = []   # (tag, li, got, exp, gap)
+
 def _weights_release_check(tag: str, li: int, free_before: int, expected_release: int) -> None:
     """Honest accounting of the original weight storage, measured across the WHOLE layer split.
 
@@ -218,14 +220,18 @@ def _weights_release_check(tag: str, li: int, free_before: int, expected_release
         got = free_after - free_before
         exp = int(expected_release)
         gap = exp - got
-        logger.info("hotsplit release %s: layer %d free-VRAM delta %+.2f GiB (expected %+.2f GiB from "
-                    "shapes); %s", tag, li, got / 2**30, exp / 2**30,
-                    "as expected" if abs(gap) < 2**30 else f"short by {gap / 2**30:.2f} GiB")
-        if gap >= 2**30:
-            logger.warning("hotsplit release %s: layer %d did not give back what the shapes predict "
-                           "(short %.2f GiB). Likely cause: the old kernel or its quant config still "
-                           "references the original tensors. Check qm.moe_kernel / quant config before "
-                           "trusting the freed amount.", tag, li, gap / 2**30)
+        _release_log.append((tag, li, got, exp, gap))
+        if abs(gap) >= 2**30:
+            n_short = sum(1 for _, _, _, _, g in _release_log if g >= 2**30)
+            if n_short == 1:
+                logger.warning("hotsplit release %s: layer %d did not give back what the shapes predict "
+                               "(short %.2f GiB). Likely cause: the old kernel or its quant config still "
+                               "references the original tensors. Further mismatches are counted silently; "
+                               "see the summary after 'hotsplit done'.", tag, li, gap / 2**30)
+            logger.debug("hotsplit release %s: layer %d short by %.2f GiB", tag, li, gap / 2**30)
+        else:
+            logger.debug("hotsplit release %s: layer %d free-VRAM delta %+.2f GiB (expected %+.2f GiB)",
+                         tag, li, got / 2**30, exp / 2**30)
     except Exception as e:
         logger.warning("hotsplit release %s: layer %d check failed: %r", tag, li, e)
 
@@ -1062,5 +1068,13 @@ def apply_hotsplit(model: torch.nn.Module) -> None:
                            "dynamic vs static", tag)
     elif dynamic:
         logger.info("hotsplit %s: dynamic_hook=INACTIVE (mode=static, no dynamic layers)", tag)
+    n_short = sum(1 for _, _, _, _, g in _release_log if g >= 2**30)
+    total_gap = sum(g for _, _, _, _, g in _release_log if g >= 2**30)
+    if n_short:
+        logger.warning("hotsplit release summary %s: %d/%d layers short on free-VRAM, total gap %.2f GiB "
+                       "(lingering refs from old kernel/quant config; does NOT affect correctness)",
+                       tag, n_short, len(_release_log), total_gap / 2**30)
+    else:
+        logger.info("hotsplit release summary %s: all %d layers released as expected", tag, len(_release_log))
     logger.info("hotsplit done %s in %.0fs; GPU memory free %.1f GiB; host avail %.1f GiB",
                 tag, time.time() - t0, torch.cuda.mem_get_info()[0] / 2**30, _host_avail_gib())

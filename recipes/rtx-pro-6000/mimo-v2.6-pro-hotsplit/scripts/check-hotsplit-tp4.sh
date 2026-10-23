@@ -81,6 +81,16 @@ fi
 if [ "$MODE" = "dynamic" ]; then
   # in dynamic mode the step hook must be installed on every rank
   chk "dynamic step hook installed on every rank" "hotsplit dynamic: step hook installed" 4
+  # FIRED = the hook was actually called on a real engine step (not just installed).
+  # Without this line the planner is dead and plan_passes stays 0 forever.
+  fired="$(grep -c 'step hook FIRED' <<<"$L" || true)"
+  if [ "${fired:-0}" -ge 1 ]; then
+    echo "PASS  step hook FIRED (hook is in the hot path, $fired rank(s))"
+  else
+    echo "FAIL  step hook FIRED never appeared — the hook is installed but never called."
+    echo "      (plan_passes will stay 0; check which GPUModelRunner class the engine uses)"
+    fail=1
+  fi
 else
   # in static mode the hook may be absent; note it, do not fail
   chk "dynamic step hook (static mode, optional)" "hotsplit dynamic: step hook installed" 0
