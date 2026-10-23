@@ -218,6 +218,7 @@ def _vram_precheck(hot_bytes: int, free_now: int, reserve_gib: float, floor_gib:
 
 
 _release_log: list[tuple[str, int, int, int, int]] = []   # (tag, li, got, exp, gap)
+_mem_log: list[tuple[str, int, float, float]] = []   # (tag, li, incr_alloc, incr_reserved)
 
 def _weights_release_check(tag: str, li: int, free_before: int, expected_release: int) -> None:
     """Honest accounting of the original weight storage, measured across the WHOLE layer split.
@@ -285,12 +286,19 @@ def _mem_peak_report(tag: str, li: int, state: dict) -> None:
         incr_alloc = (peak_alloc - base_alloc) / 2**30
         incr_reserved = (peak_reserved - base_reserved) / 2**30
         free, total = torch.cuda.mem_get_info()
-        logger.info("hotsplit mem %s: layer %d peak +%.2f GiB alloc / +%.2f GiB reserved above baseline "
-                    "(peak alloc %.2f GiB of which baseline %.2f GiB; reserved %.2f GiB); "
-                    "free %.2f/%.2f GiB, host avail %.1f GiB",
-                    tag, li, incr_alloc, incr_reserved,
-                    peak_alloc / 2**30, base_alloc / 2**30, peak_reserved / 2**30,
-                    free / 2**30, total / 2**30, _host_avail_gib())
+        _mem_log.append((tag, li, incr_alloc, incr_reserved))
+        n_same = sum(1 for t_, _, _, _ in _mem_log if t_ == tag)
+        if n_same == 1:
+            logger.info("hotsplit mem %s: layer %d peak +%.2f GiB alloc / +%.2f GiB reserved above baseline "
+                        "(peak alloc %.2f GiB of which baseline %.2f GiB; reserved %.2f GiB); "
+                        "free %.2f/%.2f GiB, host avail %.1f GiB. Further layers are aggregated; "
+                        "see the summary after 'hotsplit done'.",
+                        tag, li, incr_alloc, incr_reserved,
+                        peak_alloc / 2**30, base_alloc / 2**30, peak_reserved / 2**30,
+                        free / 2**30, total / 2**30, _host_avail_gib())
+        else:
+            logger.debug("hotsplit mem %s: layer %d peak +%.2f GiB alloc / +%.2f GiB reserved",
+                         tag, li, incr_alloc, incr_reserved)
     except Exception as e:  # telemetry must never take the lane down
         logger.warning("hotsplit mem %s: per-layer report failed: %r", tag, e)
 
@@ -755,7 +763,12 @@ def _split_layer_dynamic(layer, hot_ids: list[int], E: int, make_kernel, make_qc
     # net release expected on this rank: the full original weights are dropped, the hot bank is a
     # new device copy, the cold bank is host-resident (UVA or a host copy), and the FULL scales
     # stay on device because the cold bank needs every expert's scales.
-    _orig_w = w13.numel() * w13.element_size() + w2.numel() * w2.element_size()
+    # only on-device weights count: UVA views free no VRAM when dropped (2026-10-23:
+    # this mismatch made 68/69 layers report a phantom 'shortfall')
+    _orig_w = 0
+    for _t in (w13, w2):
+        if _t is not None and not _is_uva(_t):
+            _orig_w += _t.numel() * _t.element_size()
     _newdev_w = 0
     if s and hw13 is not None:
         _newdev_w += hw13.numel() * hw13.element_size() + hw2.numel() * hw2.element_size()
@@ -1093,5 +1106,10 @@ def apply_hotsplit(model: torch.nn.Module) -> None:
                        tag, n_short, len(_release_log), total_gap / 2**30)
     else:
         logger.info("hotsplit release summary %s: all %d layers released as expected", tag, len(_release_log))
+    if _mem_log:
+        _peaks = [a for t_, _, a, _ in _mem_log if t_ == tag]
+        if _peaks:
+            logger.info("hotsplit mem summary %s: %d layers peaked, worst layer added +%.2f GiB alloc "
+                        "(per-layer details at DEBUG)", tag, len(_peaks), max(_peaks))
     logger.info("hotsplit done %s in %.0fs; GPU memory free %.1f GiB; host avail %.1f GiB",
                 tag, time.time() - t0, torch.cuda.mem_get_info()[0] / 2**30, _host_avail_gib())

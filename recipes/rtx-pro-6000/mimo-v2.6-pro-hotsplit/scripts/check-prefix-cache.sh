@@ -29,6 +29,8 @@ def metrics():
         return None, None
     q = h = 0
     for line in text.splitlines():
+        if "_created" in line:
+            continue
         if line.startswith("vllm:prefix_cache_queries"):
             try:
                 q += float(line.rsplit(None, 1)[-1])
