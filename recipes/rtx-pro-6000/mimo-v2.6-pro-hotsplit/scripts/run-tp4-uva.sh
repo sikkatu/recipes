@@ -106,9 +106,9 @@ MODEL_ID="${MODEL_ID:-XiaomiMiMo/MiMo-V2.6-Pro-MOPD}"
 MODEL_DIR="${MODEL_DIR:-}"
 CONTAINER="${CONTAINER:-mimo-pro-tp4-uva}"
 PORT="${PORT:-30007}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-16384}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-1048576}"   # 1M context by default (model max_position_embeddings=1048576)
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"        # auto = bf16; fp8 halves KV memory (use for long context)
-MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-1024}"   # raise to 8192 for long-context prefill
+MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"   # long-context prefill (1M context default)
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-1}"
 CPU_OFFLOAD_GB="${CPU_OFFLOAD_GB:-128}"
 GPU_UTIL="${GPU_UTIL:-0.85}"

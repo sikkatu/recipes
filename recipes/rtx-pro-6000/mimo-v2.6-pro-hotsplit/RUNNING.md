@@ -9,11 +9,11 @@ Requirements: Linux, NVIDIA driver, Docker + NVIDIA Container Toolkit, four visi
 
 Run:
 ```bash
-MAX_MODEL_LEN=16384 CPU_OFFLOAD_GB=128 scripts/run-tp4-uva.sh
+CPU_OFFLOAD_GB=128 scripts/run-tp4-uva.sh
 ```
 For an existing local model:
 ```bash
-MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD MAX_MODEL_LEN=16384 scripts/run-tp4-uva.sh
+MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD scripts/run-tp4-uva.sh
 ```
 Default model ID: `XiaomiMiMo/MiMo-V2.6-Pro-MOPD`. The cache is `~/.cache/huggingface`. The launcher starts at 16K context and sends a small API test. Increase context only after startup works (32K, 64K, 128K). It does not explicitly select a compressed KV-cache dtype.
 

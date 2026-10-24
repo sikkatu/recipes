@@ -78,7 +78,7 @@ bash scripts/preflight-tp4.sh
 ```bash
 export MODEL_DIR="$HOME/models/MiMo-V2.6-Pro-MOPD"
 export IMAGE="vllm/vllm-openai:nightly-8e2beaa3bff595577a069d49d96bde9074294ec2@sha256:167ccd8696bc09f1b63301185134e04b883623f8adcbd8e3a0ec3140a193abcf"
-export MAX_MODEL_LEN=16384 CPU_OFFLOAD_GB=128 GPU_UTIL=0.85
+export CPU_OFFLOAD_GB=128 GPU_UTIL=0.85   # MAX_MODEL_LEN defaults to 1048576 (1M context)
 bash scripts/run-tp4-uva.sh
 ```
 
@@ -101,7 +101,7 @@ adjust after the first boot shows how much GPU memory is free.
 ```bash
 export MODEL_DIR="$HOME/models/MiMo-V2.6-Pro-MOPD"
 export IMAGE="vllm/vllm-openai:nightly-8e2beaa3bff595577a069d49d96bde9074294ec2@sha256:167ccd8696bc09f1b63301185134e04b883623f8adcbd8e3a0ec3140a193abcf"
-export MAX_MODEL_LEN=16384 CPU_OFFLOAD_GB=128 GPU_UTIL=0.85
+export CPU_OFFLOAD_GB=128 GPU_UTIL=0.85   # MAX_MODEL_LEN defaults to 1048576 (1M context)
 export HOTSPLIT_DYNAMIC=0 HOTSPLIT_HOT_GIB=30
 bash scripts/run-tp4-hotsplit.sh
 ```
@@ -154,7 +154,7 @@ MiMo-V2.6-Pro routes 8 of 384 experts in each of 69 MoE layers; at ~19 MiB per e
 - EP is unsupported. Speculative decoding is untested here.
 - **NUMA pinning: usually inert in VMs, optional `HOTSPLIT_NUMA_MAP` for experts.** On a dual-socket host emulated by Proxmox, `nvidia-smi topo -m` shows all GPUs on `PHB` (one PCIe host bridge) with `GPU NUMA ID: N/A` — the VM does not expose which socket each GPU is physically on. `numa_bind` therefore logs `numa_node unknown; not binding` and skips pinning. This is **correct and safe**: guessing the map wrong would pin workers to the wrong socket and make things worse. DDR4 locality (which stick is on which socket) is a host-side concern — check with `numactl --hardware` and `lstopo` on the Proxmox host (not inside the VM). If you know the physical topology for sure, `HOTSPLIT_NUMA_MAP="0:0,1:0,2:1,3:1"` (gpu:node pairs) enables the binding explicitly.
 - **Prefix caching is ON by default** (`enable_prefix_caching=True` in the pinned vLLM build). Repeated prompt prefixes (system prompts, conversation history) are served from KV cache — the "cheap cached tokens" behaviour of cloud providers. `scripts/check-prefix-cache.sh` verifies caching two ways: Prometheus counters from `/metrics` when available, otherwise the engine log line `Prefix cache hit rate: X%` (printed periodically under load). It also prints decode speed (tok/s) per call.
-- **1M-token context** (`MAX_MODEL_LEN=1048576`) is supported by the model config (`max_position_embeddings=1048576`, 9 full-attention + 61 sliding-window layers). KV cost on TP4 (2 KV-heads per rank, GQA 128:8): **~13.5 GiB/GPU at bf16** (recommended — full precision, fits the 81 GiB budget), ~6.8 GiB/GPU at fp8 (only if you need the headroom). Sliding-window layers add a constant ~11 MiB cap regardless of length. Verified arithmetic and config, not a live 1M run. For long prefill use `--max-num-batched-tokens 8192`.
+- **1M-token context** (`MAX_MODEL_LEN=1048576`) is supported by the model config (`max_position_embeddings=1048576`, 9 full-attention + 61 sliding-window layers). KV cost on TP4 (2 KV-heads per rank, GQA 128:8): **~13.5 GiB/GPU at bf16** (recommended — full precision, fits the 81 GiB budget), ~6.8 GiB/GPU at fp8 (only if you need the headroom). Sliding-window layers add a constant ~11 MiB cap regardless of length. Verified arithmetic and config, not a live 1M run. 1M is the launcher default (`MAX_MODEL_LEN=1048576`, `MAX_NUM_BATCHED_TOKENS=8192` for long prefill); override with `MAX_MODEL_LEN=16384` if you want the smaller KV footprint.
 
 ## Rollback
 

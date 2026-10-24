@@ -118,7 +118,7 @@ bash scripts/preflight-tp4.sh
 ```bash
 export MODEL_DIR="$HOME/models/MiMo-V2.6-Pro-MOPD"
 export IMAGE="vllm/vllm-openai:nightly-8e2beaa3bff595577a069d49d96bde9074294ec2@sha256:167ccd8696bc09f1b63301185134e04b883623f8adcbd8e3a0ec3140a193abcf"
-export MAX_MODEL_LEN=16384 CPU_OFFLOAD_GB=128 GPU_UTIL=0.85
+export CPU_OFFLOAD_GB=128 GPU_UTIL=0.85   # MAX_MODEL_LEN defaults to 1048576 (1M context)
 bash scripts/run-tp4-uva.sh
 ```
 
@@ -139,7 +139,7 @@ docker stop mimo-pro-tp4-uva && docker rm mimo-pro-tp4-uva
 ```bash
 export MODEL_DIR="$HOME/models/MiMo-V2.6-Pro-MOPD"
 export IMAGE="vllm/vllm-openai:nightly-8e2beaa3bff595577a069d49d96bde9074294ec2@sha256:167ccd8696bc09f1b63301185134e04b883623f8adcbd8e3a0ec3140a193abcf"
-export MAX_MODEL_LEN=16384 CPU_OFFLOAD_GB=128 GPU_UTIL=0.85
+export CPU_OFFLOAD_GB=128 GPU_UTIL=0.85   # MAX_MODEL_LEN defaults to 1048576 (1M context)
 export HOTSPLIT_DYNAMIC=0 HOTSPLIT_HOT_GIB=30
 bash scripts/run-tp4-hotsplit.sh
 ```
@@ -209,7 +209,7 @@ MiMo-V2.6-Pro 在 69 个 MoE 层中的每一层从 384 个专家中路由 8 个�
 - 不支持 EP。此处未测试投机解码。
 - **NUMA 绑定：VM 中通常无效，`HOTSPLIT_NUMA_MAP` 是可选项。** Proxmox 模拟双路主机时，`nvidia-smi topo -m` 显示所有 GPU 走 `PHB`（同一个 PCIe host bridge），`GPU NUMA ID: N/A` —— VM 不暴露 GPU 的物理 socket 归属。因此 `numa_bind` 打印 `numa_node unknown; not binding` 并跳过绑定。这是**正确且安全的**：猜错映射会把 worker 绑到错误的 socket，反而更糟。DDR4 插槽归属是宿主机的问题 —— 在 Proxmox 宿主机（不是 VM 内）用 `numactl --hardware` 和 `lstopo` 检查。如确切知道物理拓扑，`HOTSPLIT_NUMA_MAP="0:0,1:0,2:1,3:1"`（gpu:node 配对）可显式启用绑定。
 - **Prefix caching 默认开启**（固定 vLLM 构建中 `enable_prefix_caching=True`）。重复的请求前缀（系统提示、对话历史）从 KV 缓存提供 —— 这就是云服务商的"便宜缓存 token"机制。注意：此构建返回 `prompt_tokens_details:null`，API 响应中的 `cached_tokens` 不可靠。`scripts/check-prefix-cache.sh` 用两种方式验证缓存：优先读 `/metrics` 的 Prometheus 计数器（如可用），否则读引擎日志行 `Prefix cache hit rate: X%`（负载下周期性打印）。同时输出每次调用的解码速度（tok/s）。
-- **1M token 上下文**（`MAX_MODEL_LEN=1048576`）由模型配置支持（`max_position_embeddings=1048576`，9 个全注意力层 + 61 个滑动窗口层）。TP4 下 KV 开销（每 rank 2 个 KV 头，GQA 128:8）：**bf16 约 13.5 GiB/卡**（推荐——全精度，81 GiB 预算足够），fp8 约 6.8 GiB/卡（仅需余量时用）。滑动窗口层固定约 11 MiB，与长度无关。已验证算术和配置，未做 1M token 实测。长 prefill：`--max-num-batched-tokens 8192`。
+- **1M token 上下文**（`MAX_MODEL_LEN=1048576`）由模型配置支持（`max_position_embeddings=1048576`，9 个全注意力层 + 61 个滑动窗口层）。TP4 下 KV 开销（每 rank 2 个 KV 头，GQA 128:8）：**bf16 约 13.5 GiB/卡**（推荐——全精度，81 GiB 预算足够），fp8 约 6.8 GiB/卡（仅需余量时用）。滑动窗口层固定约 11 MiB，与长度无关。已验证算术和配置，未做 1M token 实测。1M 是启动脚本默认值（`MAX_MODEL_LEN=1048576`，长 prefill 用 `MAX_NUM_BATCHED_TOKENS=8192`）；如需更小的 KV 占用可覆盖 `MAX_MODEL_LEN=16384`。
 
 ## 回退
 

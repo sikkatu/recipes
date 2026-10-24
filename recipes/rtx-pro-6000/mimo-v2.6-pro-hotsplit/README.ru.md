@@ -139,7 +139,7 @@ bash scripts/preflight-tp4.sh
 ```bash
 export MODEL_DIR="$HOME/models/MiMo-V2.6-Pro-MOPD"
 export IMAGE="vllm/vllm-openai:nightly-8e2beaa3bff595577a069d49d96bde9074294ec2@sha256:167ccd8696bc09f1b63301185134e04b883623f8adcbd8e3a0ec3140a193abcf"
-export MAX_MODEL_LEN=16384 CPU_OFFLOAD_GB=128 GPU_UTIL=0.85
+export CPU_OFFLOAD_GB=128 GPU_UTIL=0.85   # MAX_MODEL_LEN defaults to 1048576 (1M context)
 bash scripts/run-tp4-uva.sh
 ```
 
@@ -162,7 +162,7 @@ docker stop mimo-pro-tp4-uva && docker rm mimo-pro-tp4-uva
 ```bash
 export MODEL_DIR="$HOME/models/MiMo-V2.6-Pro-MOPD"
 export IMAGE="vllm/vllm-openai:nightly-8e2beaa3bff595577a069d49d96bde9074294ec2@sha256:167ccd8696bc09f1b63301185134e04b883623f8adcbd8e3a0ec3140a193abcf"
-export MAX_MODEL_LEN=16384 CPU_OFFLOAD_GB=128 GPU_UTIL=0.85
+export CPU_OFFLOAD_GB=128 GPU_UTIL=0.85   # MAX_MODEL_LEN defaults to 1048576 (1M context)
 export HOTSPLIT_DYNAMIC=0 HOTSPLIT_HOT_GIB=30
 bash scripts/run-tp4-hotsplit.sh
 ```
@@ -241,7 +241,7 @@ MiMo-V2.6-Pro маршрутизирует 8 из 384 экспертов в ка
 - EP не поддерживается. Спекулятивное декодирование здесь не тестировалось.
 - **NUMA-закрепление: в VM обычно неактивно, `HOTSPLIT_NUMA_MAP` — опция для экспертов.** На двухсокетном хосте, эмулируемом Proxmox, `nvidia-smi topo -m` показывает все GPU через `PHB` (один PCIe host bridge) с `GPU NUMA ID: N/A` — VM не сообщает, к какому сокету физически подключена каждая карта. Поэтому `numa_bind` пишет `numa_node unknown; not binding` и пропускает закрепление. Это **правильно и безопасно**: неверная карта закрепила бы worker не на том сокете и ухудшила бы работу. Раскладка DDR4 (какая планка на каком сокете) — вопрос хоста: проверяйте `numactl --hardware` и `lstopo` на хосте Proxmox (не внутри VM). Если физическая топология точно известна, `HOTSPLIT_NUMA_MAP="0:0,1:0,2:1,3:1"` (gpu:node пары) включает закрепление явно.
 - **Prefix caching включён по умолчанию** (`enable_prefix_caching=True` в закреплённом билде vLLM). Повторяющиеся префиксы запросов (системный промпт, история диалога) отдаются из KV-кэша — это «дешёвые кэшированные токены» облачных провайдеров. Важно: эта сборка возвращает `prompt_tokens_details:null`, поэтому `cached_tokens` в ответе API непригоден. `scripts/check-prefix-cache.sh` проверяет кэш двумя способами: счётчики Prometheus из `/metrics` (если доступны) или строку лога движка `Prefix cache hit rate: X%` (печатается периодически под нагрузкой). Также выводит скорость декодирования (ток/с) на каждый вызов.
-- **Контекст 1M токенов** (`MAX_MODEL_LEN=1048576`) поддерживается конфигом модели (`max_position_embeddings=1048576`, 9 слоёв полного внимания + 61 sliding-window). Расчёт KV-cache на TP4 (2 KV-головы на ранг, GQA 128:8): **~13.5 GiB/GPU в bf16** (рекомендуется — полная точность, влезает в бюджет 81 GiB), ~6.8 GiB/GPU в fp8 (только если нужен запас). Sliding-window слои добавляют постоянные ~11 MiB независимо от длины. Проверена арифметика и конфиг, не живой прогон на 1M токенов. Для длинного prefill: `--max-num-batched-tokens 8192`.
+- **Контекст 1M токенов** (`MAX_MODEL_LEN=1048576`) поддерживается конфигом модели (`max_position_embeddings=1048576`, 9 слоёв полного внимания + 61 sliding-window). Расчёт KV-cache на TP4 (2 KV-головы на ранг, GQA 128:8): **~13.5 GiB/GPU в bf16** (рекомендуется — полная точность, влезает в бюджет 81 GiB), ~6.8 GiB/GPU в fp8 (только если нужен запас). Sliding-window слои добавляют постоянные ~11 MiB независимо от длины. Проверена арифметика и конфиг, не живой прогон на 1M токенов. 1M — дефолт лаунчера (`MAX_MODEL_LEN=1048576`, `MAX_NUM_BATCHED_TOKENS=8192` для длинного prefill); для меньшего KV-следа переопределите `MAX_MODEL_LEN=16384`.
 
 ## Откат
 
