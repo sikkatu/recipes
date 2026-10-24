@@ -3,6 +3,36 @@
 # VERIFIED (2026-10-23) on target hardware with MOE_BACKEND=humming: static AND dynamic (hit 41.6->45.4%, 6.6 tok/s, output identical to baseline). Marlin + UVA still OOMs at repack. Read ../README.md first.
 set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
+# --- seed settings from ./tp4.env (optional) ------------------------------------------------------
+# Same contract as manage.sh: values already in the environment WIN over the file -- the file
+# is applied only for names that are not already exported ("only fill values not already
+# exported"). Copy tp4.env.example to tp4.env and edit; no 'set -a' sourcing (that would lose
+# the env-priority contract). The file is read before any validation so IMAGE / MODEL_REVISION /
+# API_KEY set in it are honoured.
+_TP4_ENV="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tp4.env"
+if [ -f "$_TP4_ENV" ]; then
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    case "$_line" in
+      ''|'#'*) continue ;;                 # skip blanks and comments
+    esac
+    _line="${_line#export }"               # allow 'export X=1' without gluing it into the name
+    _name="${_line%%=*}"
+    [ "$_name" = "$_line" ] && continue     # not an assignment
+    _name="$(printf '%s' "$_name" | tr -d ' ')"
+    [ -z "$_name" ] && continue
+    if [ -z "${!_name:-}" ]; then           # only fill values not already exported
+      _val="${_line#*=}"
+      _val="${_val%% #*}"                   # strip inline comment: everything after " # "
+      _val="${_val%"${_val##*[![:space:]]}"}"   # strip trailing whitespace
+      _val="${_val//\"/}"                  # strip surrounding double quotes if any
+      case "$_val" in
+        *'$HOME'*|*'${HOME}'*) _val="${_val//\$HOME/$HOME}"; _val="${_val//\$\{HOME\}/$HOME}" ;;
+      esac
+      export "$_name=$_val"
+    fi
+  done < "$_TP4_ENV"
+  echo "settings seeded from $_TP4_ENV (exported environment still wins)"
+fi
 
 # --- security contract (SECURITY.md): no wide bind, no disabled auth -----------------------------
 # BIND is where the SERVER listens (host networking: -p would be a no-op, so the bind is the only
