@@ -14,12 +14,12 @@
 ## 索引
 <!-- recipe-index:start -->
 
-| 硬件 | 配方 | 模型 | 状态 | 要点 | 更新 |
-|---|---|---|---|---|---|
-| `rtx-pro-6000` | [DeepSeek-V4.1-Flash — 4× RTX PRO 6000（96 GB），TP4：UVA 专家卸载的专家均衡](recipes/rtx-pro-6000/deepseek-v4.1-flash-hotsplit/) | DeepSeek-V4.1-Flash | 📝 草稿 | — | — |
-| `rtx-pro-6000` | [GLM-5.3-Flash — 4× RTX PRO 6000（96 GB），TP4：UVA 专家卸载的专家均衡](recipes/rtx-pro-6000/glm-5.3-flash-hotsplit/) | GLM-5.3-Flash | 📝 草稿 | — | — |
-| `rtx-pro-6000` | [GLM-5.3 — 4× RTX PRO 6000（96 GB），TP4：UVA 专家卸载的专家均衡](recipes/rtx-pro-6000/glm-5.3-hotsplit/) | GLM-5.3 | 📝 草稿 | — | — |
-| `rtx-pro-6000` | [MiMo-V2.6-Pro — 4× RTX PRO 6000（TP4）：UVA 专家卸载 + hotsplit](recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/) | MiMo-V2.6-Pro | ✅ 已验证 | — | — |
+| 硬件 | 配方 | 模型 | 状态 |
+|---|---|---|---|
+| `rtx-pro-6000` | [DeepSeek-V4.1-Flash — 4× RTX PRO 6000（96 GB），TP4：UVA 专家卸载的专家均衡](recipes/rtx-pro-6000/deepseek-v4.1-flash-hotsplit/) | DeepSeek-V4.1-Flash | 📝 草稿 |
+| `rtx-pro-6000` | [GLM-5.3-Flash — 4× RTX PRO 6000（96 GB），TP4：UVA 专家卸载的专家均衡](recipes/rtx-pro-6000/glm-5.3-flash-hotsplit/) | GLM-5.3-Flash | 📝 草稿 |
+| `rtx-pro-6000` | [GLM-5.3 — 4× RTX PRO 6000（96 GB），TP4：UVA 专家卸载的专家均衡](recipes/rtx-pro-6000/glm-5.3-hotsplit/) | GLM-5.3 | 📝 草稿 |
+| `rtx-pro-6000` | [MiMo-V2.6-Pro — 4× RTX PRO 6000（TP4）：UVA 专家卸载 + hotsplit](recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/) | MiMo-V2.6-Pro | ✅ 已验证 |
 
 <!-- recipe-index:end -->
 

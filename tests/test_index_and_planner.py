@@ -1,7 +1,7 @@
 """Index generator tests (audit block 4) and planner invariants (block 8).
 
 Index: escaping keeps the table structure intact for every adversarial value; Model stays
-short; Headline shows at most one number; the main metric follows the explicit `primary`
+short.
 flag; dates normalise to YYYY-MM-DD.
 
 Planner: input validation rejects invalid statistics instead of producing a plausible plan;
@@ -44,42 +44,12 @@ def test_table_columns_stay_constant_for_adversarial_values():
         "model": {"name": "Model | with | pipes", "quantization": "x|y"},
         "metrics": [{"value": 1.5, "unit": "|", "workload": "w", "label": "a|b"}],
     }
-    row = f"| hw | [t](u/) | {ri.model_cell(r)} | {ri.STATUS_ICON['draft']} | {ri.headline(r)} | {ri.norm_date(r['updated'])} |"
+    row = f"| hw | [t](u/) | {ri.model_cell(r)} | {ri.STATUS_ICON['draft']} |"
     header_cols = len(ri.render().splitlines()[2].split("|"))
     # count unescaped pipes
     import re
     unescaped = re.split(r"(?<!\\)\|", row)
     assert len(unescaped) == header_cols, f"column count changed: {len(unescaped)} vs {header_cols}"
-
-
-def test_headline_single_number_no_protocol():
-    r = {"metrics": [{"value": 42.5, "unit": "tok/s", "workload": "T=0, ignore_eos, 192 tok, warm, prose, knee.sh r2, 3 reps", "label": None}]}
-    h = ri.headline(r)
-    assert "42.5" in h
-    assert "knee.sh" not in h, "test protocol must not leak into the index"
-    assert h.count("|") == 0
-
-
-def test_primary_metric_flag_wins():
-    r = {"metrics": [
-        {"value": 1, "unit": "a", "workload": "w"},
-        {"value": 2, "unit": "b", "workload": "w", "primary": True},
-    ]}
-    assert "2" in ri.headline(r)
-
-
-def test_no_metrics_shows_dash():
-    assert ri.headline({}) == "—"
-    assert ri.headline({"metrics": []}) == "—"
-
-
-def test_date_normalisation():
-    import datetime
-    assert ri.norm_date("2026-10-15") == "2026-10-15"
-    assert ri.norm_date("2026-10-15T12:00:00") == "2026-10-15"
-    assert ri.norm_date(datetime.date(2026, 1, 2)) == "2026-01-02"
-    assert ri.norm_date(None) == "—"
-    assert ri.norm_date("garbage") == "—"
 
 
 def test_model_cell_short():

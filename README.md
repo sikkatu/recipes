@@ -17,12 +17,12 @@ Recipes are MIT; models and engines carry their own licenses and their authors' 
 
 <!-- recipe-index:start -->
 
-| Hardware | Recipe | Model | Status | Headline | Updated |
-|---|---|---|---|---|---|
-| `rtx-pro-6000` | [DeepSeek-V4.1-Flash — 4× RTX PRO 6000 (96 GB), TP4: expert balance for UVA expert offload](recipes/rtx-pro-6000/deepseek-v4.1-flash-hotsplit/) | DeepSeek-V4.1-Flash | 📝 draft | — | — |
-| `rtx-pro-6000` | [GLM-5.3-Flash — 4× RTX PRO 6000 (96 GB), TP4: expert balance for UVA expert offload](recipes/rtx-pro-6000/glm-5.3-flash-hotsplit/) | GLM-5.3-Flash | 📝 draft | — | — |
-| `rtx-pro-6000` | [GLM-5.3 — 4× RTX PRO 6000 (96 GB), TP4: expert balance for UVA expert offload](recipes/rtx-pro-6000/glm-5.3-hotsplit/) | GLM-5.3 | 📝 draft | — | — |
-| `rtx-pro-6000` | [MiMo-V2.6-Pro — 4× RTX PRO 6000 (TP4): UVA expert offload + hotsplit](recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/) | MiMo-V2.6-Pro | ✅ verified | — | — |
+| Hardware | Recipe | Model | Status |
+|---|---|---|---|
+| `rtx-pro-6000` | [DeepSeek-V4.1-Flash — 4× RTX PRO 6000 (96 GB), TP4: expert balance for UVA expert offload](recipes/rtx-pro-6000/deepseek-v4.1-flash-hotsplit/) | DeepSeek-V4.1-Flash | 📝 draft |
+| `rtx-pro-6000` | [GLM-5.3-Flash — 4× RTX PRO 6000 (96 GB), TP4: expert balance for UVA expert offload](recipes/rtx-pro-6000/glm-5.3-flash-hotsplit/) | GLM-5.3-Flash | 📝 draft |
+| `rtx-pro-6000` | [GLM-5.3 — 4× RTX PRO 6000 (96 GB), TP4: expert balance for UVA expert offload](recipes/rtx-pro-6000/glm-5.3-hotsplit/) | GLM-5.3 | 📝 draft |
+| `rtx-pro-6000` | [MiMo-V2.6-Pro — 4× RTX PRO 6000 (TP4): UVA expert offload + hotsplit](recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit/) | MiMo-V2.6-Pro | ✅ verified |
 
 <!-- recipe-index:end -->
 

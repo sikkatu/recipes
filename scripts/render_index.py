@@ -8,9 +8,6 @@ Usage:
 Index contract:
   - every cell is Markdown-escaped (pipes, backslashes, newlines) so table structure cannot break;
   - Model shows a short name + quantization only — no revision history, no file sizes;
-  - Headline shows at most one number + one short label — no test protocols;
-  - the main metric is chosen by the explicit `metrics[].primary` flag (falls back to first);
-  - dates are normalised to YYYY-MM-DD (or "—" for drafts);
   - drafts without recipe.yaml are indexed from their README H1;
   - any non-draft recipe without recipe.yaml is a contract error (see check_recipe.py).
 """
@@ -46,9 +43,9 @@ STATUS_ICON_ZH = {
     "deprecated": "⛔ 已弃用",
 }
 TABLE_HEADER = {
-    "en": lambda: ["", "| Hardware | Recipe | Model | Status | Headline | Updated |", "|---|---|---|---|---|---|"],
-    "ru": lambda: ["", "| Железо | Рецепт | Модель | Статус | Ключевое | Обновлено |", "|---|---|---|---|---|---|"],
-    "zh": lambda: ["", "| 硬件 | 配方 | 模型 | 状态 | 要点 | 更新 |", "|---|---|---|---|---|---|"],
+    "en": lambda: ["", "| Hardware | Recipe | Model | Status |", "|---|---|---|---|"],
+    "ru": lambda: ["", "| Железо | Рецепт | Модель | Статус |", "|---|---|---|---|"],
+    "zh": lambda: ["", "| 硬件 | 配方 | 模型 | 状态 |", "|---|---|---|---|"],
 }
 
 
@@ -59,46 +56,6 @@ def md_escape(s) -> str:
     t = t.replace("|", "\\|")
     t = t.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
     return t.strip()
-
-
-def norm_date(v) -> str:
-    """Return YYYY-MM-DD or '—'. Accepts date / datetime / string; never emits garbage."""
-    if v is None:
-        return "—"
-    s = str(v).strip()
-    if not s or s == "—":
-        return "—"
-    # datetime.date / datetime objects have isoformat
-    iso = getattr(v, "isoformat", None)
-    if callable(iso):
-        s = iso()[:10]
-    else:
-        m = re.match(r"(\d{4}-\d{2}-\d{2})", s)
-        s = m.group(1) if m else "—"
-    return s if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s) else "—"
-
-
-def pick_metric(r: dict) -> dict | None:
-    """Explicit primary first, then first metric. Never fabricate a number."""
-    ms = r.get("metrics") or []
-    if not ms:
-        return None
-    for m in ms:
-        if isinstance(m, dict) and m.get("primary"):
-            return m
-    return ms[0] if isinstance(ms[0], dict) else None
-
-
-def headline(r: dict) -> str:
-    """One number + short label — the index is an overview, not a method card."""
-    m = pick_metric(r)
-    if not m:
-        return "—"
-    val = m.get("value")
-    if val is None:
-        return "—"
-    label = f" *({md_escape(m['label'])})*" if m.get("label") else ""
-    return f"{val:g} {md_escape(m.get('unit', ''))}{label}"
 
 
 def model_cell(r: dict) -> str:
@@ -160,7 +117,7 @@ def render(lang: str = "en") -> str:
         icon = icons.get(status, md_escape(status))
         out.append(
             f"| `{hw}` | [{md_escape(r['title'])}]({rel}/) | {model_cell(r)} "
-            f"| {icon} | {headline(r)} | {norm_date(r.get('updated'))} |"
+            f"| {icon} |"
         )
     out.append("")
     return "\n".join(out)
