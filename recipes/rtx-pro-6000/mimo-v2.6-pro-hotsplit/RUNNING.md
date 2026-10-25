@@ -3,7 +3,7 @@
 > **English** | [Русский](RUNNING.ru.md) | [中文](RUNNING.zh.md)
 
 
-This launches a **stock vLLM TP4 + UVA expert-offload baseline**. It does not claim that the custom Hotsplit patch has been ported or validated for TP4.
+This launches **vLLM TP4 + UVA expert offload** (the UVA baseline; the hotsplit launcher is separate, see below). The hotsplit patch has been ported AND validated for TP4 (static + dynamic verified 2026-10-23, see README).
 
 Requirements: Linux, NVIDIA driver, Docker + NVIDIA Container Toolkit, four visible GPUs, and hundreds of GB of free disk.
 
@@ -15,11 +15,11 @@ For an existing local model:
 ```bash
 MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD scripts/run-tp4-uva.sh
 ```
-Default model ID: `XiaomiMiMo/MiMo-V2.6-Pro-MOPD`. The cache is `~/.cache/huggingface`. The launcher starts at 16K context and sends a small API test. Increase context only after startup works (32K, 64K, 128K). It does not explicitly select a compressed KV-cache dtype.
+Default model ID: `XiaomiMiMo/MiMo-V2.6-Pro-MOPD`. The cache is `~/.cache/huggingface`. The launcher starts at the full 1M-token context by default (`MAX_MODEL_LEN=1048576`, KV ~13.5 GiB/GPU in bf16; override with `MAX_MODEL_LEN=16384` for a smaller KV footprint) and sends a small API test.
 
 `CPU_OFFLOAD_GB` is the per-rank offload cap, not RAM reserved at startup. Host DDR4 RAM over the PCIe 4.0 link is much slower than the GPU's own 1792 GB/s GDDR7, and slower than a coherent GPU-CPU interconnect.
 
-The Hotsplit code hooks private vLLM internals. TP4 expert placement/ranking/counters must be validated before claiming Hotsplit works on this workstation. This baseline is the first real serving step, not a verified Hotsplit port.
+The Hotsplit code hooks private vLLM internals. TP4 expert placement/ranking/counters WERE validated on target hardware 2026-10-23 (static + dynamic, see README). The UVA baseline is the running serving path; hotsplit is the verified hot/cold split on top of it.
 
 Inspect/stop:
 ```bash
@@ -89,7 +89,16 @@ itself. To measure the actual effect, on the same workload and the same request 
 3. Watch the `hotsplit dynamic hit-rate` log line after each update: it reports hot vs cold
    routed-row split and the swap cost. The hot share should trend up against the offline plan;
    if it does not, the live traffic differs from `HOTSPLIT_COUNTS` -- rebuild the ranking from
-   your own counters with `python3 patches/hotsplit_rerank.py live/counts.rank*.json`.
+   your own counters (one file per rank; the launcher writes them every `HOTSPLIT_LIVE_SECS`):
+   ```bash
+   python3 patches/hotsplit_rerank.py 'live/counts.rank*.json' \
+       patches/expert_hist_mix.json live/expert_hist_custom.json 1.0
+   ```
+   (usage: `hotsplit_rerank.py LIVE OFFLINE OUT [live_weight]` -- LIVE accepts a glob and merges
+   the rank snapshots; refuses with exit 2 if the live sample is under `MIN_TOKENS`, default 50k
+   tokens/layer). The result `live/expert_hist_custom.json` is in the format `hotsplit.py` reads;
+   copy it inside the container (`docker cp` to `/live/expert_hist_custom.json`) and set
+   `HOTSPLIT_COUNTS=/live/expert_hist_custom.json` in `tp4.env`, then restart the server.
 4. Note the live counter includes padded slots of captured batches (`live lane counts incl.
    padded slots` in the snapshot meta). The bias is small at decode sizes but compare static
    and dynamic runs at the same `MAX_NUM_SEQS` and batch shape to cancel it.

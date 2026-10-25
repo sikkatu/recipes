@@ -144,7 +144,16 @@ case "$cmd" in
     need_docker
     echo "Updating $ROOT from git ..."
     GITROOT="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" || die "not a git checkout: $ROOT"
+    BEFORE="$(git -C "$GITROOT" rev-parse HEAD)"
     git -C "$GITROOT" pull --ff-only || die "git pull failed (local changes?). Resolve, then re-run."
+    AFTER="$(git -C "$GITROOT" rev-parse HEAD)"
+    if [ "$BEFORE" != "$AFTER" ]; then
+      echo "--- what changed ($BEFORE -> $AFTER) ---"
+      git -C "$GITROOT" diff --stat "$BEFORE..$AFTER"
+      echo "---------------------------------------"
+    else
+      echo "already up to date ($BEFORE)"
+    fi
     bash "${BASH_SOURCE[0]}" restart
     ;;
   rollback)

@@ -65,6 +65,8 @@ HOTSPLIT_DRYRUN=0            # 1 = залогировать план и не т�
 HOTSPLIT_HOT_GIB=30          # НА RANK. Обязательно: при полной UVA-выгрузке бюджет по умолчанию 0
 #                # (пустой hot-набор -> разбиение молча ничего не делает). 30 GiB -- проверенный старт.
 HOTSPLIT_WEIGHTS=decode=1,prefill=0
+HOTSPLIT_COUNTS=/w/expert_hist_mix.json   # гистограмма экспертов для горячего рейтинга (путь в контейнере; пересобрать через patches/hotsplit_rerank.py)
+# HOTSPLIT_ALLOW_STATIC_FALLBACK=0  # 1 = принять статичный запуск, если динамический хук не удалось установить
 # HOTSPLIT_COUNTS_MODE=phase-balanced  # или traffic-weighted (вклад фазы по сырому объёму)
 HOTSPLIT_HOST_FLOOR_GIB=128  # прекратить разбиение, если свободная RAM хоста (с учётом всех 4 rank) упадёт ниже этого
 
@@ -94,6 +96,7 @@ HOTSPLIT_NUMA_POLICY=preferred   # или bind (строго; падает/OOM �
 # (./live по умолчанию) -- входные данные patches/hotsplit_rerank.py для перенастройки рейтинга.
 HOTSPLIT_LIVE_COUNTS=/live/counts.json   # базовый путь файла счётчиков внутри контейнера
 HOTSPLIT_LIVE_SECS=600                   # секунды между сбросами счётчиков
+HOTSPLIT_MAX_TOKENS=8192                 # лимит токенов живого счётчика на слой за сброс (граница finalize)
 
 # --- запас VRAM (резерв предварительной проверки) -----------------------------------------------
 # HOTSPLIT_VRAM_RESERVE_GIB=2   # резерв под буферы CUDA-graph, workspace Marlin и последующие

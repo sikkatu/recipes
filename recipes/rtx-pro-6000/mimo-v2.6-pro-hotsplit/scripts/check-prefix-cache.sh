@@ -9,8 +9,8 @@
 #      periodically under load; works when /metrics is not exposed.
 # The OpenAI API field prompt_tokens_details.cached_tokens is NOT used: this vLLM
 # build returns prompt_tokens_details:null, so it is never populated.
-# Also prints decode speed (tok/s) per call — the first call includes torch.compile
-# warmup, so compare run 2+ against each other.
+# Also prints decode speed (tok/s) per call — the first call is slower only because
+# the prompt is a cache MISS (all tokens prefill). Run 2+ vs run 2+ to compare decode.
 
 python3 - <<'PYEOF'
 import json, time, urllib.request
@@ -103,6 +103,6 @@ else:
 
 if len(results) >= 2:
     warm, steady = results[0], results[-1]
-    print(f"speed: warmup {warm[3]:.1f} tok/s -> steady {steady[3]:.1f} tok/s "
-          f"(first call includes torch.compile warmup)")
+    print(f"speed: first run {warm[3]:.1f} tok/s -> steady {steady[3]:.1f} tok/s "
+          f"(the first call is a prompt cache MISS: all tokens prefill; run 2+ hits KV cache)")
 PYEOF

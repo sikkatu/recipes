@@ -44,13 +44,15 @@ def ask(topic, prompt, mt):
     body = json.dumps({"model": "mimo-pro",
                        "messages": [{"role": "user", "content": prompt}],
                        "max_tokens": mt, "temperature": 0.7,
-                       "stream": True}).encode()
+                       "stream": True,
+                       "stream_options": {"include_usage": True}}).encode()
     req = urllib.request.Request(URL + "/v1/chat/completions", data=body,
                                  headers={"Authorization": "Bearer " + KEY,
                                           "Content-Type": "application/json"})
     t0 = time.time()
     t_first = t_last = None
     n_gen = 0
+    usage_tokens = 0
     with urllib.request.urlopen(req, timeout=600) as resp:
         for raw in resp:
             line = raw.decode("utf-8", "replace").strip()
@@ -63,6 +65,8 @@ def ask(topic, prompt, mt):
                 chunk = json.loads(payload)
             except json.JSONDecodeError:
                 continue
+            if chunk.get("usage"):
+                usage_tokens = chunk["usage"].get("completion_tokens", 0)
             for choice in chunk.get("choices", []):
                 delta = choice.get("delta") or {}
                 piece = delta.get("content") or delta.get("reasoning") or ""
@@ -73,6 +77,10 @@ def ask(topic, prompt, mt):
                         t_first = now
                     t_last = now
     wall = time.time() - t0
+    # prefer the engine-reported token count (SSE chunks != tokens: several tokens per
+    # chunk or vice versa) -- falls back to chunk counting only if usage is missing.
+    if usage_tokens > 0:
+        n_gen = usage_tokens
     if t_first is None:
         return topic, 0, wall, 0.0, wall
     ttft = t_first - t0
@@ -123,7 +131,10 @@ results = {
 }
 outdir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "live")
 os.makedirs(outdir, exist_ok=True)
-outpath = os.path.join(outdir, "bench_results.json")
+# timestamped filename: each run is kept, so x8-vs-x16 and static-vs-dynamic runs
+# can be compared afterwards instead of silently overwriting one live/bench_results.json
+stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+outpath = os.path.join(outdir, f"bench_results_{stamp}.json")
 try:
     with open(outpath, "w") as f:
         json.dump(results, f, indent=2)

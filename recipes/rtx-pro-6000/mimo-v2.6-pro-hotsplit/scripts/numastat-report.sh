@@ -24,7 +24,7 @@ for pid in $PIDS; do
       found=1
       echo "=== worker PID $pid ==="
       echo "cmdline: $cmd"
-      docker exec "$C" sh -c "grep -E 'N[0-9]+=' /proc/$pid/numa_maps 2>/dev/null | awk '{for(i=2;i<=NF;i++){if(\$i ~ /^N[0-9]+=\$/){split(\$i,a,\"=\"); n[a[1]]+=a[2]}}} END {for(k in n) print k\"=\"n[k]}' | sort" 2>/dev/null || echo "  (numa_maps not readable from container)"
+      docker exec "$C" sh -c "grep -E 'N[0-9]+=' /proc/$pid/numa_maps 2>/dev/null | awk '{for(i=2;i<=NF;i++){if(\$i ~ /^N[0-9]+=[0-9]+\$/){split(\$i,a,\"=\"); n[a[1]]+=a[2]}}} END {for(k in n) print k\"=\"n[k]}' | sort" 2>/dev/null || echo "  (numa_maps not readable from container)"
       if command -v numastat >/dev/null; then
         echo "--- host numastat -p $pid ---"
         numastat -p "$pid" 2>/dev/null | tail -n +2 || echo "  (numastat needs root or the worker to be visible from the host)"

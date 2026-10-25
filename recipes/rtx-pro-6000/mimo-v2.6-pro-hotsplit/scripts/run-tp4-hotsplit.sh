@@ -157,6 +157,34 @@ HOTSPLIT_WEIGHTS="${HOTSPLIT_WEIGHTS:-decode=1,prefill=0}"
 HOTSPLIT_HOT_GIB="${HOTSPLIT_HOT_GIB:-}"      # per rank; empty = same GPU-memory bytes as the stock placement
 HOTSPLIT_DRYRUN="${HOTSPLIT_DRYRUN:-0}"
 HOTSPLIT_DYNAMIC="${HOTSPLIT_DYNAMIC:-1}"        # 1 = dynamic hot set (default, verified 2026-10-23); 0 = static
+# validate/normalize boolean-ish knobs: accept 1/true/yes/on as true, 0/false/no/off as false;
+# anything else is a fatal config error (silent misinterpretation previously caused
+# HOTSPLIT_DYNAMIC=true to run static and HOTSPLIT_DRYRUN=true to run a real split).
+normalize_bool() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) echo 1 ;;
+    0|false|FALSE|no|NO|off|OFF|'') echo 0 ;;
+    *)
+      echo "ERROR: ${2} must be 1/0 (also accepts true/false, yes/no, on/off), got '${1}'" >&2
+      exit 1
+      ;;
+  esac
+}
+HOTSPLIT_DRYRUN="$(normalize_bool "${HOTSPLIT_DRYRUN:-0}" HOTSPLIT_DRYRUN)"
+HOTSPLIT_DYNAMIC="$(normalize_bool "${HOTSPLIT_DYNAMIC:-1}" HOTSPLIT_DYNAMIC)"
+HOTSPLIT_NUMA="$(normalize_bool "${HOTSPLIT_NUMA:-1}" HOTSPLIT_NUMA)"
+HOTSPLIT_ALLOW_STATIC_FALLBACK="$(normalize_bool "${HOTSPLIT_ALLOW_STATIC_FALLBACK:-0}" HOTSPLIT_ALLOW_STATIC_FALLBACK)"
+# HOTSPLIT_HOT_GIB must be a plain integer GiB count: '30G' or '30 GiB' would previously
+# surface as a crash from inside the container ~13 minutes into weight loading.
+if [ -n "${HOTSPLIT_HOT_GIB:-}" ]; then
+  case "$HOTSPLIT_HOT_GIB" in
+    [0-9]|[0-9][0-9]|[0-9][0-9][0-9]) : ;;
+    *)
+      echo "ERROR: HOTSPLIT_HOT_GIB must be a whole number of GiB (e.g. 30), got '$HOTSPLIT_HOT_GIB'" >&2
+      exit 1
+      ;;
+  esac
+fi
 HOTSPLIT_ALLOW_STATIC_FALLBACK="${HOTSPLIT_ALLOW_STATIC_FALLBACK:-0}"
 HOTSPLIT_HOST_FLOOR_GIB="${HOTSPLIT_HOST_FLOOR_GIB:-128}"
 HOTSPLIT_NUMA="${HOTSPLIT_NUMA:-1}"
