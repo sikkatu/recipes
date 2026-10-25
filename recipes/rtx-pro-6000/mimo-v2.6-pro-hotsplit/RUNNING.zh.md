@@ -2,8 +2,10 @@
 
 > [English](RUNNING.md) | [Русский](RUNNING.ru.md) | **中文**
 
-启动的是**原版 vLLM TP4 + UVA 专家卸载基线**。不声称自定义 Hotsplit 补丁已移植或
-验证于 TP4。
+启动的是**vLLM TP4 + UVA 专家卸载 + hotsplit**。已在目标硬件上验证：静态和动态 ——
+2026-10-23（负载下 3 次事务性更新，命中率 41.6->45.4%，6.6 tok/s）。验证级别：启动与
+专家分配 —— 已验证；动态更新 —— 已在负载下验证；质量通过 5 条查询的 A/B 对比
+（仅有外观差异；完整回归评估仍待进行）。
 
 要求：Linux、NVIDIA 驱动、Docker + NVIDIA Container Toolkit、四块可见 GPU，数百 GB 磁盘。
 

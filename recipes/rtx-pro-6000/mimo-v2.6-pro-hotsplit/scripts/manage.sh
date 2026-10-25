@@ -5,8 +5,8 @@
 # usage: manage.sh <command>
 #   status      show container state, GPU state and API reachability
 #   logs        follow the hotsplit container log (Ctrl-C to stop following)
-#   start       start the hotsplit server (verified defaults: HOTSPLIT_DYNAMIC=0, HOTSPLIT_HOT_GIB=30;
-#               override via env or tp4.env)
+#   start       start the hotsplit server (defaults: HOTSPLIT_DYNAMIC=1, HOTSPLIT_HOT_GIB=30;
+#               override via env or tp4.env; HOTSPLIT_DYNAMIC=0 selects the static split)
 #   start-uva   start the stock UVA baseline instead
 #   stop        stop and remove the running server container
 #   restart     stop + start (picks up current env and tp4.env if present)
@@ -109,10 +109,10 @@ case "$cmd" in
   start)
     need_docker
     if [ -f "$HERE/run-tp4-hotsplit.sh" ]; then
-      # Verified-on-target config (2026-10-23): static split, explicit hot budget.
-      # HOTSPLIT_DYNAMIC=1 is NOT verified; HOTSPLIT_HOT_GIB empty is a silent no-op
-      # under full UVA offload (default budget = 0). Only fill values not already set.
-      export HOTSPLIT_DYNAMIC="${HOTSPLIT_DYNAMIC:-0}"
+      # Verified-on-target config (2026-10-23): dynamic split (HOTSPLIT_DYNAMIC=1) is the
+      # default; HOTSPLIT_DYNAMIC=0 selects the static split. HOTSPLIT_HOT_GIB empty is a
+      # silent no-op under full UVA offload (default budget = 0). Only fill values not already set.
+      export HOTSPLIT_DYNAMIC="${HOTSPLIT_DYNAMIC:-1}"
       export HOTSPLIT_HOT_GIB="${HOTSPLIT_HOT_GIB:-30}"
       exec bash "$HERE/run-tp4-hotsplit.sh"
     else

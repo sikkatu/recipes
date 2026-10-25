@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # MiMo-V2.6-Pro on 4x RTX PRO 6000: vLLM TP4 + UVA expert offload + hotsplit (static or dynamic hot experts).
-# VERIFIED (2026-10-23) on target hardware with MOE_BACKEND=humming: static AND dynamic (hit 41.6->45.4%, 6.6 tok/s, output identical to baseline). Marlin + UVA still OOMs at repack. Read ../README.md first.
+# VERIFIED (2026-10-23) on target hardware with MOE_BACKEND=humming: static AND dynamic (hit 41.6->45.4%, 6.6 tok/s; 5-query A/B vs baseline showed only cosmetic differences -- full regression evaluation pending). Marlin + UVA still OOMs at repack. Read ../README.md first.
 set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
 # --- seed settings from ./tp4.env (optional) ------------------------------------------------------
