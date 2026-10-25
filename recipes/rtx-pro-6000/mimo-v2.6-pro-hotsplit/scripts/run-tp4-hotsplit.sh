@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # MiMo-V2.6-Pro on 4x RTX PRO 6000: vLLM TP4 + UVA expert offload + hotsplit (static or dynamic hot experts).
-# VERIFIED (2026-10-23) on target hardware with MOE_BACKEND=humming: static AND dynamic (hit 41.6->45.4%, 6.6 tok/s; 5-query A/B vs baseline showed only cosmetic differences -- full regression evaluation pending). Marlin + UVA still OOMs at repack. Read ../README.md first.
+# VERIFIED (2026-10-23) on target hardware with MOE_BACKEND=humming: static AND dynamic (hit 41.3->45.4%, 11.0 tok/s at PCIe x16 2026-10-25; 5-query A/B vs baseline showed only cosmetic differences -- full regression evaluation pending). Marlin + UVA still OOMs at repack. Read ../README.md first.
 set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
 # --- seed settings from ./tp4.env (optional) ------------------------------------------------------
@@ -477,20 +477,22 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
   fi
   if curl -fsS --max-time 3 -H "Authorization: Bearer $API_KEY" "http://$URLHOST:$PORT/v1/models" > "$MODELS_JSON" 2>/dev/null; then
     cat "$MODELS_JSON"; echo
-    SMOKE_JSON="$(curl -fsS -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+    SMOKE_JSON="$(curl -fsS --max-time 120 -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
       "http://$URLHOST:$PORT/v1/chat/completions" \
-      -d '{"model":"mimo-pro","messages":[{"role":"user","content":"Reply exactly TP4_OK"}],"max_tokens":64,"temperature":0}')"
+      -d '{"model":"mimo-pro","messages":[{"role":"user","content":"Reply exactly TP4_OK"}],"max_tokens":64,"temperature":0}' || true)"
     echo "$SMOKE_JSON"
     # the answer must actually contain TP4_OK: HTTP 200 + a coherent-looking body is not
-    # proof of correct weights (the stock loader produced garbage that looked plausible)
+    # proof of correct weights (the stock loader produced garbage that looked plausible).
+    # A failed check is a FAILED LAUNCH: exit 1 so automation cannot mistake it for success.
     if printf '%s' "$SMOKE_JSON" | grep -q '"content":"[^"]*TP4_OK'; then
       echo "smoke test: answer contains TP4_OK -- model output verified"
-    else
-      echo "ERROR: smoke answer does NOT contain TP4_OK -- weights may be loaded wrong" >&2
-      echo "       (compare with a run using PATCH_MODEL_FILES=1; see README Known limits)" >&2
+      echo "Now run: $HERE/check-hotsplit-tp4.sh $CONTAINER"
+      exit 0
     fi
-    echo "Now run: $HERE/check-hotsplit-tp4.sh $CONTAINER"
-    exit 0
+    echo "ERROR: smoke answer does NOT contain TP4_OK -- weights may be loaded wrong" >&2
+    echo "       (compare with a run using PATCH_MODEL_FILES=1; see README Known limits)" >&2
+    [ -z "$SMOKE_JSON" ] && echo "       (the generation request itself failed or timed out after 120 s)" >&2
+    exit 1
   fi
   sleep "$WAIT_SLEEP"
 done

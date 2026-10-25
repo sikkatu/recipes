@@ -8,7 +8,7 @@
 连贯输出（`TP4_OK`，`finish_reason: stop`）。为此修复了三个库格式 bug —— 每库专家计数
 （`c6dfb58`）、每库 `LayerConfig`（`dataclasses.replace(cfg, num_experts=n_rows)`）和每库 scales
 （`32d3373`）—— 见 `patches/hotsplit.py::_patch_humming_bank`。Marlin 重打包路径仍会 OOM
-（见“已知限制”）。**Dynamic 模式也已在目标硬件上验证（2026-10-23）**：在 `HOTSPLIT_DYNAMIC=1` 下，热集合跟随实时路由 —— 约 6700 个引擎 step 内 3 个规划窗口、3 次事务性更新（每次更新在 69 层中交换 138 个专家，每次 43–74 毫秒，`errors=0`），50 个混合流量请求中热库命中率 41.6->45.4%，平均 6.6 tok/s（实测 2026-10-23），回答全部连贯。步进钩子在两种 GPUModelRunner 实现（V1 与 V2）上都会触发，交换路径通过 uint8 视图处理 MXFP4 的 `Float8_e8m0fnu` scales。验证级别：启动与专家分配 —— 已验证；动态更新 —— 已在负载下验证（3 次事务性更新，errors=0）；质量通过 5 条查询的 A/B 对比（差异仅为外观：LaTeX 空格、押韵变化）—— 完整回归评估仍待进行，投产前请完成。
+（见“已知限制”）。**Dynamic 模式也已在目标硬件上验证（2026-10-23）**：在 `HOTSPLIT_DYNAMIC=1` 下，热集合跟随实时路由 —— 约 6700 个引擎 step 内 3 个规划窗口、3 次事务性更新（每次更新在 69 层中交换 138 个专家，每次 43–74 毫秒，`errors=0`），50 个混合流量请求中热库命中率 41.3->45.4%，平均 11.0 tok/s（实测 2026-10-25，四卡均在 PCIe Gen4 x16；GPU0 曾为 x8 时为 6.6 tok/s），回答全部连贯。步进钩子在两种 GPUModelRunner 实现（V1 与 V2）上都会触发，交换路径通过 uint8 视图处理 MXFP4 的 `Float8_e8m0fnu` scales。验证级别：启动与专家分配 —— 已验证；动态更新 —— 已在负载下验证（3 次事务性更新，errors=0）；质量通过 5 条查询的 A/B 对比（差异仅为外观：LaTeX 空格、押韵变化）—— 完整回归评估仍待进行，投产前请完成。
 
 目标主机：4× RTX PRO 6000 Blackwell Workstation Edition —— 每卡 96 GB GDDR7 带 ECC
 （1792 GB/s）。卡是 PCIe Gen 5，但本机主机插槽协商为 **PCIe 4.0**，GPU↔主机链路为 Gen 4

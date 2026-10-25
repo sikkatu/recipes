@@ -157,7 +157,17 @@ def test_draft_recipe_dir_is_scanned_for_credentials(tmp_path):
 
 
 # ------------------------------------------------------------------ launchers: IPv6 loopback
-CURL_OK = '#!/usr/bin/env bash\necho "curl $*" >> "$STUB_LOG"\necho \'{"ok":1}\'\nexit 0\n'
+# The stub curl answers /v1/models generically but must satisfy the launch smoke test:
+# a chat completion answer that contains TP4_OK (the launcher now exits 1 otherwise).
+CURL_OK = (
+    '#!/usr/bin/env bash\n'
+    'echo "curl $*" >> "$STUB_LOG"\n'
+    'case "$*" in\n'
+    '  *chat/completions*) echo \'{"choices":[{"message":{"content":"TP4_OK"},"finish_reason":"stop"}]}\' ;;\n'
+    '  *) echo \'{"ok":1}\' ;;\n'
+    'esac\n'
+    'exit 0\n'
+)
 LAUNCHERS = [
     BASE / "deepseek-v4.1-flash-hotsplit" / "scripts" / "run-tp4-uva.sh",
     BASE / "glm-5.3-flash-hotsplit" / "scripts" / "run-tp4-uva.sh",
@@ -165,6 +175,20 @@ LAUNCHERS = [
     BASE / "mimo-v2.6-pro-hotsplit" / "scripts" / "run-tp4-uva.sh",
     BASE / "mimo-v2.6-pro-hotsplit" / "scripts" / "run-tp4-hotsplit.sh",
 ]
+
+
+@pytest.mark.parametrize("lp", LAUNCHERS, ids=lambda p: f"{p.parent.parent.name}/{p.name}")
+def test_smoke_failure_is_a_failed_launch(lp, stub_env):
+    """Smoke test without TP4_OK in the answer must exit 1 (once it exited 0 and automation
+    could read a garbage-producing run as a successful launch)."""
+    env, log = stub_env
+    curl = Path(env["PATH"].split(":")[0]) / "curl"
+    curl.write_text(CURL_OK.replace('echo \'{"choices":[{"message":{"content":"TP4_OK"},"finish_reason":"stop"}]}\'',
+                                   'echo \'{"choices":[{"message":{"content":"garbage output"},"finish_reason":"stop"}]}\''))
+    r = run_launcher(lp, env, {"BIND": "127.0.0.1", "ALLOW_NO_AUTH": "1", "API_KEY": "",
+                               "IMAGE": "x@sha256:" + "a" * 64})
+    assert r.returncode == 1, f"smoke without TP4_OK must fail the launch, got rc={r.returncode}\n{r.stdout}{r.stderr}"
+    assert "smoke answer does NOT contain TP4_OK" in r.stdout + r.stderr
 
 
 @pytest.mark.parametrize("lp", LAUNCHERS, ids=lambda p: f"{p.parent.parent.name}/{p.name}")

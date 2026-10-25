@@ -222,10 +222,18 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
   printf '[%3ds] container=%s  %s\n' "$ELAPSED" "${RUN_STATE%% *}" "${LASTLOG:-starting...}"
   if curl -fsS --max-time 3 -H "Authorization: Bearer $API_KEY" "http://$URLHOST:$PORT/v1/models" > "$MODELS_JSON" 2>/dev/null; then
     cat "$MODELS_JSON"; echo
-    curl -fsS -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+    SMOKE_JSON="$(curl -fsS --max-time 120 -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
       "http://$URLHOST:$PORT/v1/chat/completions" \
-      -d '{"model":"glm-flash","messages":[{"role":"user","content":"Reply exactly TP4_OK"}],"max_tokens":64,"temperature":0}'
-    echo
+      -d '{"model":"glm-flash","messages":[{"role":"user","content":"Reply exactly TP4_OK"}],"max_tokens":64,"temperature":0}' || true)"
+    echo "$SMOKE_JSON"
+    # the answer must contain TP4_OK -- a failed check is a FAILED LAUNCH (exit 1)
+    if printf '%s' "$SMOKE_JSON" | grep -q '"content":"[^"]*TP4_OK'; then
+      echo "smoke test: answer contains TP4_OK -- model output verified"
+    else
+      echo "ERROR: smoke answer does NOT contain TP4_OK -- weights may be loaded wrong" >&2
+      [ -z "$SMOKE_JSON" ] && echo "       (the generation request failed or timed out after 120 s)" >&2
+      exit 1
+    fi
     echo "Balance check: bash $HERE/balance.sh"
     exit 0
   fi

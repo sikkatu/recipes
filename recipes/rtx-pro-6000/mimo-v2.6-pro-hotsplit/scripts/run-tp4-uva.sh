@@ -353,20 +353,22 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
   fi
   if curl -fsS --max-time 3 -H "Authorization: Bearer $API_KEY" "http://$URLHOST:$PORT/v1/models" > "$MODELS_JSON" 2>/dev/null; then
     cat "$MODELS_JSON"; echo
-    SMOKE_JSON="$(curl -fsS -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+    SMOKE_JSON="$(curl -fsS --max-time 120 -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
       "http://$URLHOST:$PORT/v1/chat/completions" \
-      -d '{"model":"mimo-pro","messages":[{"role":"user","content":"Reply exactly TP4_OK"}],"max_tokens":64,"temperature":0}')"
+      -d '{"model":"mimo-pro","messages":[{"role":"user","content":"Reply exactly TP4_OK"}],"max_tokens":64,"temperature":0}' || true)"
     echo "$SMOKE_JSON"
     # the answer must actually contain TP4_OK: HTTP 200 + a coherent-looking body is not
     # proof of correct weights (the stock loader produced garbage that looked plausible)
+    # a failed check is a FAILED LAUNCH: exit 1 so automation cannot mistake it for success
     if printf '%s' "$SMOKE_JSON" | grep -q '"content":"[^"]*TP4_OK'; then
       echo "smoke test: answer contains TP4_OK -- model output verified"
-    else
-      echo "ERROR: smoke answer does NOT contain TP4_OK -- weights may be loaded wrong" >&2
-      echo "       (compare with a run using PATCH_MODEL_FILES=1; see README Known limits)" >&2
+      echo "Baseline ready (no hot/cold split in this launcher). Verify the API with: bash $HERE/check-tp4-api.sh"
+      exit 0
     fi
-    echo "Baseline ready (no hot/cold split in this launcher). Verify the API with: bash $HERE/check-tp4-api.sh"
-    exit 0
+    echo "ERROR: smoke answer does NOT contain TP4_OK -- weights may be loaded wrong" >&2
+    echo "       (compare with a run using PATCH_MODEL_FILES=1; see README Known limits)" >&2
+    [ -z "$SMOKE_JSON" ] && echo "       (the generation request itself failed or timed out after 120 s)" >&2
+    exit 1
   fi
   sleep "$WAIT_SLEEP"
 done
