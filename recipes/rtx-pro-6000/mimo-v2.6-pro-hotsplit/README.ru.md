@@ -249,3 +249,20 @@ MiMo-V2.6-Pro маршрутизирует 8 из 384 экспертов в ка
 запускает простой UVA baseline). `docker stop mimo-pro-tp4-hotsplit`, затем запустите
 `scripts/run-tp4-uva.sh` (стоковый baseline) или перезапустите с неустановленным `HOTSPLIT_COUNTS`
 в контейнере (измените вызов лаунчера) — ничего вне контейнера не изменяется.
+
+## Опционально: постоянный KV-кэш (kv-persistence)
+
+Для длинных историй чата (от 100 тыс. токенов) вычисленные KV-блоки могут сохраняться
+при перезапуске vLLM — через внешний сервис кэша
+([kv-persistence](https://github.com/sikkatu/kv-persistence)). В рецепте есть
+**опциональная** интеграция, по умолчанию ВЫКЛ — без `KV_PERSIST` ничего не меняется:
+
+1. Запустите сервис кэша (см. его wiki):
+   `bash scripts/start-cache.sh` из клона kv-persistence.
+2. Укажите `KV_PERSIST=1` (и `KV_PERSIST_HOST` / `KV_PERSIST_PORT`, если сервис
+   не на loopback `127.0.0.1:5555`) в `tp4.env` и запустите лаунчер как обычно:
+   `bash scripts/run-tp4-uva.sh` (или `run-tp4-hotsplit.sh`).
+
+Лаунчер только добавляет `--kv-transfer-config` (LMCache `LMCacheMPConnector`);
+все остальные аргументы, патчи и образ остаются теми же. Полная настройка, проверка
+персистентности и откат — в [wiki kv-persistence](https://github.com/sikkatu/kv-persistence/wiki).

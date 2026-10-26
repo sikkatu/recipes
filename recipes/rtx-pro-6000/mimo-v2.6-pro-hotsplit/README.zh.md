@@ -216,3 +216,19 @@ MiMo-V2.6-Pro 在 69 个 MoE 层中的每一层从 384 个专家中路由 8 个�
 `scripts/rollback.sh`（停止并移除 hotsplit 容器；`--start-baseline` 也启动纯 UVA 基线）。
 `docker stop mimo-pro-tp4-hotsplit`，然后运行 `scripts/run-tp4-uva.sh`（原版基线），
 或在容器中不设置 `HOTSPLIT_COUNTS` 重新启动（编辑启动脚本调用）—— 容器外不做任何修改。
+
+## 可选：持久化 KV 缓存（kv-persistence）
+
+对于超长聊天历史（10 万+ token），已计算的 KV 块可以在 vLLM 重启后保留——通过外部缓存服务
+（[kv-persistence](https://github.com/sikkatu/kv-persistence)）。配方中带有**可选**集成，
+默认关闭——不设置 `KV_PERSIST` 时行为完全不变：
+
+1. 启动缓存服务（见其 wiki）：
+   在 kv-persistence 的克隆中执行 `bash scripts/start-cache.sh`。
+2. 在 `tp4.env` 中设置 `KV_PERSIST=1`（如缓存服务不在回环 `127.0.0.1:5555`，
+   还需设置 `KV_PERSIST_HOST` / `KV_PERSIST_PORT`），然后照常启动：
+   `bash scripts/run-tp4-uva.sh`（或 `run-tp4-hotsplit.sh`）。
+
+启动脚本仅追加 `--kv-transfer-config`（LMCache `LMCacheMPConnector`）；
+其他所有参数、补丁与镜像保持不变。完整安装、持久化验证与回滚见
+[kv-persistence wiki](https://github.com/sikkatu/kv-persistence/wiki)。

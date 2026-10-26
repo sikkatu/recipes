@@ -159,3 +159,20 @@ MiMo-V2.6-Pro routes 8 of 384 experts in each of 69 MoE layers; at ~19 MiB per e
 ## Rollback
 
 `scripts/rollback.sh` (stops+removes the hotsplit container; `--start-baseline` also starts the plain UVA baseline). `docker stop mimo-pro-tp4-hotsplit`, then run `scripts/run-tp4-uva.sh` (stock baseline) or relaunch with `HOTSPLIT_COUNTS` unset in the container (edit the launcher call) — nothing outside the container is modified.
+
+## Optional: persistent KV cache (kv-persistence)
+
+Long chat-history prompts (100k+ tokens) can keep their computed KV blocks across
+vLLM restarts via an external cache service ([kv-persistence](https://github.com/sikkatu/kv-persistence)).
+The recipe carries an **opt-in** integration, off by default — with `KV_PERSIST` unset
+nothing changes:
+
+1. Start the cache service (see its wiki):
+   `bash scripts/start-cache.sh` from a clone of kv-persistence.
+2. Set `KV_PERSIST=1` (and `KV_PERSIST_HOST` / `KV_PERSIST_PORT` if the cache service
+   is not on loopback `127.0.0.1:5555`) in `tp4.env`, then launch as usual:
+   `bash scripts/run-tp4-uva.sh` (or `run-tp4-hotsplit.sh`).
+
+The launcher only appends `--kv-transfer-config` (LMCache `LMCacheMPConnector`); all
+other arguments, patches and the image stay identical. Full setup, persistence
+verification and rollback: the [kv-persistence wiki](https://github.com/sikkatu/kv-persistence/wiki).

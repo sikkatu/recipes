@@ -110,3 +110,11 @@ HOTSPLIT_MAX_TOKENS=8192                 # лимит токенов живог�
 # mimo_v2.py / mimo_v2_omni.py образа на API, который переопределяют наши патчи, до монтирования;
 # укажите SITE= для переопределения. SHA-256 исходных модулей пишется в лог для сверки
 # (сравните со своим списком проверенных).
+# --- постоянный KV-кэш (интеграция kv-persistence; по умолчанию ВЫКЛ) --------------------------
+# Подключаем отдельный LMCache-сервис (github.com/sikkatu/kv-persistence), чтобы KV-блоки
+# промптов переживали перезапуск vLLM. По умолчанию 0 = рецепт работает ТОЧНО как раньше;
+# флаг добавляет --kv-transfer-config только когда равен 1. Сервис lmcache должен быть уже
+# запущен (kv-persistence: scripts/start-cache.sh).
+# KV_PERSIST=1
+# KV_PERSIST_HOST=127.0.0.1   # хост lmcache (loopback; см. docs kv-persistence)
+# KV_PERSIST_PORT=5555       # порт lmcache (ZMQ)

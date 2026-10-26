@@ -282,6 +282,21 @@ for mod in ["vllm.model_executor.models.mimo_v2","vllm.model_executor.models.mim
     -v "$RECIPE/patches/mimo_v2_omni.py:$SITE/vllm/model_executor/models/mimo_v2_omni.py:ro"
   )
 fi
+# --- persistent KV cache (kv-persistence; see github.com/sikkatu/kv-persistence) -----------------
+# OFF by default (KV_PERSIST unset/0 changes nothing). When KV_PERSIST=1 the launcher
+# attaches the external LMCache connector without touching anything else: the same
+# image, patches and arguments, only --kv-transfer-config is appended.
+KV_PERSIST="${KV_PERSIST:-0}"
+if [ "$KV_PERSIST" = "1" ]; then
+  KV_PERSIST_HOST="${KV_PERSIST_HOST:-127.0.0.1}"
+  KV_PERSIST_PORT="${KV_PERSIST_PORT:-5555}"
+  case "$KV_PERSIST_HOST:$KV_PERSIST_PORT" in
+    *[^0-9a-zA-Z.\[\]:-]*) die "KV_PERSIST_HOST/PORT contain unexpected characters" ;;
+  esac
+  KV_TRANSFER_CONFIG="{\"kv_connector\":\"LMCacheMPConnector\",\"kv_connector_module_path\":\"lmcache.integration.vllm.lmcache_mp_connector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"lmcache.mp.host\":\"tcp://$KV_PERSIST_HOST\",\"lmcache.mp.port\":\"$KV_PERSIST_PORT\"}}"
+  echo "KV_PERSIST=1: attaching LMCache connector at $KV_PERSIST_HOST:$KV_PERSIST_PORT (wiki: kv-persistence)"
+  MODEL_ARGS+=(--kv-transfer-config "$KV_TRANSFER_CONFIG")
+fi
 docker run -d --name "$CONTAINER" --restart no \
   --gpus all --ipc host --network host \
   --ulimit memlock=-1 --ulimit stack=67108864 \
