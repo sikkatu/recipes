@@ -1,3 +1,5 @@
+![4x RTX PRO 6000 recipes](assets/banner.jpg)
+
 # 4x RTX PRO 6000 Recipes
 
 > **English** | [Русский](README.ru.md) | [中文](README.zh.md)
