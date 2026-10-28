@@ -13,7 +13,7 @@ A recipe here promises: on *this* hardware (as the machine reports it, not the s
 *this* way — and here is the raw output they were read from. Recipes also keep the ledgers of what
 didn't work, because that's half the value.
 
-Recipes are MIT; models and engines carry their own licenses and their authors' credit.
+Recipes are Apache-2.0 (see LICENSE and NOTICE); models and engines carry their own licenses and their authors' credit.
 
 ## Index
 
@@ -60,4 +60,4 @@ recipes/<hardware>/<recipe>/
 
 ## Attribution
 
-These recipes are the product of substantial hands-on work on real hardware. If you use this repository — its recipes, measurements, write-ups or documentation — in your own work, please **consider referencing it**: linking `https://github.com/sikkatu/recipes` (and the specific recipe page) where you publish derived results helps others find the source. This is a request, not a license condition. Issues and corrections are welcome.
+These recipes are the product of substantial hands-on work on real hardware. If you use this repository — its recipes, measurements, write-ups or documentation — in your own work, please **consider referencing it**: linking `https://github.com/sikkatu/recipes` (and the specific recipe page) where you publish derived results helps others find the source. This is a request on top of the Apache-2.0 NOTICE obligation: distributors must reproduce the NOTICE (see NOTICE), everyone else is asked to link. Issues and corrections are welcome.

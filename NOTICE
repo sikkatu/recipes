@@ -1,0 +1,19 @@
+Hardware-pinned recipes for serving large open-weight LLMs
+Copyright 2026 sikkatu
+
+This product includes software developed by sikkatu
+(https://github.com/sikkatu/recipes).
+
+Anyone who DISTRIBUTES this software in source or object form -- forks,
+mirrors, bundlings into larger works, tools or services made available to
+others -- must retain and reproduce this NOTICE content in the bundled NOTICE
+file, documenting it in the redistribution or derivative work, or displaying it
+in the output/service attribution of the redistributed application. Per
+Apache License Section 4(d), this obligation binds distributors, not every
+personal end user who simply runs the software for themselves. Include at
+least:
+  * the author's name:  sikkatu
+  * the project name:   recipes
+  * the repository URL: https://github.com/sikkatu/recipes
+This attribution requirement complies with Section 4(d) of the Apache License,
+Version 2.0 (text in LICENSE), and deliberately reiterates it for clarity.
