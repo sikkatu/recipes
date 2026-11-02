@@ -165,15 +165,30 @@ MiMo-V2.6-Pro routes 8 of 384 experts in each of 69 MoE layers; at ~19 MiB per e
 Long chat-history prompts (100k+ tokens) can keep their computed KV blocks across
 vLLM restarts via an external cache service ([kv-persistence](https://github.com/sikkatu/kv-persistence)).
 The recipe carries an **opt-in** integration, off by default — with `KV_PERSIST` unset
-nothing changes. **With `KV_PERSIST=1` the launcher does FOUR things** (review fix):
+no cache connector is attached and no namespace remount happens. **NOTE (review fix):**
+two recipe defaults changed for ALL runs, `KV_PERSIST=0` included —
+`MAX_NUM_SEQS` 1 → 2 (user decision: no speed loss without a parallel request, more
+convenient default) and `KV_CACHE_DTYPE` `auto` (= the model default; the VERIFIED
+benchmarks ran on auto). Set `MAX_NUM_SEQS=1` / an explicit `KV_CACHE_DTYPE` in
+`tp4.env` to reproduce the old benchmark conditions exactly.
+**With `KV_PERSIST=1` the launcher does FOUR things** (review fix):
 1. **Cache-identity namespace**: `MODEL_DIR` is mounted at `/models/<namespace>` (NOT
    `/model`), so `model_config.model` — the string LMCache keys every L2 object by —
-   is unique per identity. Different revisions / KV dtypes / geometries can then
-   never read each other's KV blocks (a safe cache miss, never a wrong hit). The
-   namespace comes from `kvpersist.cli model-name` when a kv-persistence checkout is
-   found (`KVP_REPO_ROOT` or `~/kv-persistence`), else from a deterministic hash of
-   the KV-compatibility fields. `MODEL_DIR` is therefore **required** for
-   `KV_PERSIST=1` — remote fetch cannot be isolated per revision.
+   is unique per identity. Different revisions / KV dtypes / geometries then land in
+   DIFFERENT namespaces (a safe cache miss, never a wrong hit) **provided the namespace
+   is derived from the engine's ACTUAL arguments** — `KV_CACHE_DTYPE`, `MAX_MODEL_LEN`,
+   block size and TP size are passed to the CLI as `KVP_*` overrides, and `auto` is
+   resolved to the model's effective dtype first (review fix: `KV_CACHE_DTYPE=fp8`
+   used to hash as the shipped `bfloat16` pin — a wrong-hit risk). The namespace comes
+   from `kvpersist.cli model-name` when a kv-persistence checkout is found
+   (`KVP_REPO_ROOT` or `~/kv-persistence`), else from a deterministic hash of
+   the KV-compatibility fields (config.json, weight indexes + shard sizes, tokenizer
+   files, chat template, kv dtype, max-model-len, block size, TP size).
+   `MODEL_DIR` is therefore **required** for `KV_PERSIST=1` — remote fetch cannot be
+   isolated per revision. **Honesty note**: the fallback hash is a best-effort
+   approximation; for the verified-gate guarantee install kv-persistence and run
+   `verify-engine-identity.sh` before trusting cached data. If you set
+   `KV_PERSIST_NAMESPACE` manually, YOU own the isolation guarantee.
 2. `--kv-transfer-config` (LMCache `LMCacheMPConnector`).
 3. `--enable-prompt-tokens-details` — without it `cached_tokens` (the only
    machine-readable reuse counter) is never reported and the kv-persistence

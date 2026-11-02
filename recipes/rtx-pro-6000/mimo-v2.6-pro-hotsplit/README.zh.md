@@ -220,13 +220,24 @@ MiMo-V2.6-Pro 在 69 个 MoE 层中的每一层从 384 个专家中路由 8 个�
 ## 可选：持久化 KV 缓存（kv-persistence）
 对于超长聊天历史（10 万+ token），已计算的 KV 块可以在 vLLM 重启后保留——通过外部缓存服务
 （[kv-persistence](https://github.com/sikkatu/kv-persistence)）。配方中带有**可选**集成，
-默认关闭——不设置 `KV_PERSIST` 时行为完全不变。**设置 `KV_PERSIST=1` 时启动器做四件事**（评审修正）：
+默认关闭——不设置 `KV_PERSIST` 时不挂载缓存连接器、不做命名空间重挂载。**注意（评审修正）：**
+有两个配方默认值对**所有**运行（含 `KV_PERSIST=0`）生效——`MAX_NUM_SEQS` 1 → 2（用户决定：
+无并行请求时速度不受影响，默认值更方便）和 `KV_CACHE_DTYPE` `auto`（= 模型默认值；已验证
+的基准测试跑在 auto）。如需精确复现旧基准条件，请在 `tp4.env` 中设置 `MAX_NUM_SEQS=1`
+或显式 `KV_CACHE_DTYPE`。**设置 `KV_PERSIST=1` 时启动器做四件事**（评审修正）：
 1. **缓存身份命名空间**：`MODEL_DIR` 挂载到 `/models/<命名空间>`（而非 `/model`），因此
    `model_config.model`（LMCache 用它为每个 L2 对象做键的字符串）对每个身份唯一。
-   不同版本 / KV dtype / 几何配置绝不会读到彼此的 KV 块（安全的缓存未命中，绝不会错误命中）。
-   命名空间优先取自 `kvpersist.cli model-name`（若找到 kv-persistence 克隆
-   `KVP_REPO_ROOT` 或 `~/kv-persistence`），否则由 KV 兼容性字段的确定性哈希生成。
-   因此 `KV_PERSIST=1` **必须设置** `MODEL_DIR` —— 远程拉取无法按版本隔离。
+   不同版本 / KV dtype / 几何配置会落入**不同**的命名空间（安全的缓存未命中，绝不会
+   错误命中）—— **前提是命名空间从引擎的实际参数派生**：`KV_CACHE_DTYPE`、
+   `MAX_MODEL_LEN`、block size、TP size 作为 `KVP_*` 覆盖传给 CLI，且 `auto` 先解析为
+   模型的有效 dtype（评审修正：`KV_CACHE_DTYPE=fp8` 曾被哈希为固定的 `bfloat16` ——
+   错误命中的风险）。命名空间优先取自 `kvpersist.cli model-name`（若找到 kv-persistence
+   克隆 `KVP_REPO_ROOT` 或 `~/kv-persistence`），否则由 KV 兼容性字段的确定性哈希生成
+   （config.json、权重索引 + shard 大小、tokenizer 文件、chat template、kv dtype、
+   max-model-len、block size、TP size）。因此 `KV_PERSIST=1` **必须设置** `MODEL_DIR`
+   —— 远程拉取无法按版本隔离。**诚实说明**：备用哈希是尽力而为的近似；若需经过验证的
+   门禁保证，请安装 kv-persistence 并在信任缓存数据前运行 `verify-engine-identity.sh`。
+   若手动设置 `KV_PERSIST_NAMESPACE`，隔离责任由您自行承担。
 2. 追加 `--kv-transfer-config`（LMCache `LMCacheMPConnector`）。
 3. 追加 `--enable-prompt-tokens-details` —— 没有它就不会上报 `cached_tokens`（唯一的
    机器可读复用计数器），kv-persistence 的验收测试（`scripts/test-recovery.sh`）永远无法 PASS。

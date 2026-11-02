@@ -142,7 +142,7 @@ SITE="${SITE:-}"   # empty = auto-detect inside the image; set explicitly to ove
 PATCH_MODEL_FILES="${PATCH_MODEL_FILES:-1}"   # 0 = keep the image's own mimo_v2.py; hook via sitecustomize
 PORT="${PORT:-30007}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-1048576}"   # 1M context by default (model max_position_embeddings=1048576)
-KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-bfloat16}"   # vLLM CacheDType spelling: bfloat16 (was auto=bf16); fp8 halves KV memory (use for long context)
+KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"        # auto = the model default (bf16 for MiMo; the VERIFIED benchmarks ran on auto); fp8 halves KV memory (use for long context)
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"   # long-context prefill (1M context default)
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-2}"
 CPU_OFFLOAD_GB="${CPU_OFFLOAD_GB:-128}"        # per rank; with hotsplit it only decides the initial placement
@@ -452,34 +452,91 @@ fi
 # under a namespace-coded path derived from the verified cache identity. This
 # block applies the SAME mechanism here:
 #   1. prefer the real identity hash from a local kv-persistence checkout
-#      (KVP_REPO_ROOT / ~/kv-persistence): `python3 -m kvpersist.cli model-name`;
+#      (KVP_REPO_ROOT / ~/kv-persistence): `python3 -m kvpersist.cli model-name`.
+#      The REAL engine arguments are passed through as KVP_* overrides so the
+#      namespace follows the runtime values, not the shipped pins. KV_CACHE_DTYPE
+#      is RESOLVED first (`auto` -> the model's actual dtype from config.json) so
+#      an `auto` launch hashes the same as a `bfloat16` launch of that model
+#      (review fix: `KV_CACHE_DTYPE=fp8` used to hash as the shipped bf16 pin --
+#      a wrong-hit risk, not a safe miss);
 #   2. fall back to a deterministic hash of the fields that actually change
-#      KV compatibility (weights files, config.json, kv-cache dtype,
-#      max-model-len, block size) when kv-persistence is not installed.
+#      KV compatibility (weights files, config.json, tokenizer files, chat
+#      template, kv-cache dtype, max-model-len, block size, TP size) when
+#      kv-persistence is not installed.
 # The result is a path like /models/<namespace>; the engine then reports that
 # path as model_config.model and incompatible deployments can never read each
-# other's KV blocks (a safe cache miss, never a wrong hit).
+# other's KV blocks (a safe cache miss -- the namespace covers every
+# KV-affecting field, so any difference in one of them lands in a different
+# namespace).
 KV_PERSIST="${KV_PERSIST:-0}"
 if [ "$KV_PERSIST" = "1" ]; then
   KV_PERSIST_HOST="${KV_PERSIST_HOST:-127.0.0.1}"
   KV_PERSIST_PORT="${KV_PERSIST_PORT:-5555}"
+  KV_PERSIST_BLOCK_SIZE="${KV_PERSIST_BLOCK_SIZE:-16}"
   case "$KV_PERSIST_HOST:$KV_PERSIST_PORT" in
     *[^0-9a-zA-Z.\[\]:-]*) die "KV_PERSIST_HOST/PORT contain unexpected characters" ;;
   esac
+  # Resolve `auto` -> the model's EFFECTIVE dtype (config.json), so the
+  # namespace matches what the engine actually computes KV with. Without this,
+  # an `auto` launch and a `bfloat16` launch of the same model hashed
+  # DIFFERENT namespaces (harmless miss) while `fp8` hashed the shipped
+  # `bfloat16` pin (DANGEROUS: fp8 KV under a bf16 namespace). The identity
+  # gate (verify-engine-identity.sh) performs the same resolution.
+  KV_EFFECTIVE_DTYPE="$(KV_CACHE_DTYPE="$KV_CACHE_DTYPE" python3 - "$MODEL_DIR" <<'PYEOF'
+import json, os, sys
+dtype = os.environ.get("KV_CACHE_DTYPE", "auto").strip().lower()
+if dtype != "auto":
+    print(dtype)
+    raise SystemExit(0)
+try:
+    cfg = json.load(open(os.path.join(sys.argv[1], "config.json")))
+except Exception:
+    print("auto")
+    raise SystemExit(0)
+for key in ("torch_dtype", "dtype", "moe_router_dtype"):
+    v = cfg.get(key)
+    if isinstance(v, str) and v.strip():
+        print(v.strip().lower())
+        raise SystemExit(0)
+print("auto")
+PYEOF
+)"
   # --- cache-identity namespace (identical purpose to kv-persistence round 13)
   KV_PERSIST_NAMESPACE="${KV_PERSIST_NAMESPACE:-}"
   if [ -z "$KV_PERSIST_NAMESPACE" ]; then
     KVP_REPO="${KVP_REPO_ROOT:-$HOME/kv-persistence}"
     if [ -n "$MODEL_DIR" ] && [ -f "$KVP_REPO/implementation/kvpersist/cli.py" ]; then
-      KV_PERSIST_NAMESPACE="$(KVP_REPO_ROOT="$KVP_REPO" KVP_SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}" \
+      # Review fix: pass the REAL engine settings as KVP_* overrides so the
+      # namespace changes with them (fp8 KV must NOT hash as bf16). KVP_* env
+      # wins over the shipped identity files in identity_from_env_files().
+      # The CLI's stderr is kept: on error we MUST see why (a silent
+      # fallback hid "cannot derive LMCache model_name: ..." behind a
+      # misleading "kv-persistence not found" message).
+      KV_PERSIST_NAMESPACE="$(
+        KVP_REPO_ROOT="$KVP_REPO" \
+        KVP_SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}" \
+        KVP_KV_CACHE_DTYPE="$KV_EFFECTIVE_DTYPE" \
+        KVP_MAX_MODEL_LEN="$MAX_MODEL_LEN" \
+        KVP_BLOCK_SIZE="$KV_PERSIST_BLOCK_SIZE" \
+        KVP_TP_SIZE="${TP_SIZE:-4}" \
         PYTHONPATH="$KVP_REPO/implementation${PYTHONPATH:+:$PYTHONPATH}" \
-        python3 -m kvpersist.cli model-name 2>/dev/null | tail -1 || true)"
+        python3 -m kvpersist.cli model-name 2>"$HERE/kvp-model-name.err" | tail -1 || true
+      )"
+      if [ -z "$KV_PERSIST_NAMESPACE" ]; then
+        echo "KV_PERSIST=1: kv-persistence CLI model-name FAILED at $KVP_REPO:" >&2
+        cat "$HERE/kvp-model-name.err" >&2 2>/dev/null || true
+        die "cannot derive the cache-identity namespace from kv-persistence.
+Fix the error above (usually incomplete identity.env -- run
+  bash $KVP_REPO/scripts/setup-identity.sh \"$MODEL_DIR\"
+first), or set KV_PERSIST_NAMESPACE explicitly. Refusing to guess: a wrong
+namespace could put new KV under an old identity."
+      fi
     fi
     if [ -z "$KV_PERSIST_NAMESPACE" ] && [ -n "$MODEL_DIR" ]; then
       # Deterministic fallback: hash everything that changes KV compatibility.
-      KV_PERSIST_NAMESPACE="kvp-$(BLOCK_SIZE="${BLOCK_SIZE:-16}" python3 - "$MODEL_DIR" "$KV_CACHE_DTYPE" "$MAX_MODEL_LEN" <<'PYEOF'
+      KV_PERSIST_NAMESPACE="kvp-$(python3 - "$MODEL_DIR" "$KV_EFFECTIVE_DTYPE" "$MAX_MODEL_LEN" "$KV_PERSIST_BLOCK_SIZE" "${TP_SIZE:-4}" <<'PYEOF'
 import hashlib, json, os, sys
-model_dir, kv_dtype, max_len = sys.argv[1:4]
+model_dir, kv_dtype, max_len, block_size, tp_size = sys.argv[1:6]
 h = hashlib.sha256()
 for name in ("config.json",) + tuple(sorted(
         f for f in os.listdir(model_dir) if f.endswith(".index.json"))):
@@ -491,12 +548,21 @@ for f in sorted(f for f in os.listdir(model_dir)
     p = os.path.join(model_dir, f)
     h.update(f.encode())
     h.update(str(os.path.getsize(p)).encode())
-h.update(("|kv=%s|maxlen=%s|blk=%s" % (kv_dtype, max_len, os.environ.get("BLOCK_SIZE", "16"))).encode())
+# Review fix: tokenizer files and the chat template also change KV values
+# (token ids -> chunk hashes), and TP size changes the per-rank KV layout.
+for name in ("tokenizer.json", "tokenizer_config.json", "tokenizer.model",
+             "special_tokens_map.json", "chat_template.jinja", "chat_template"):
+    p = os.path.join(model_dir, name)
+    if os.path.isfile(p):
+        h.update(name.encode())
+        h.update(open(p, "rb").read())
+h.update(("|kv=%s|maxlen=%s|blk=%s|tp=%s" % (kv_dtype, max_len, block_size, tp_size)).encode())
 print(h.hexdigest()[:16])
 PYEOF
 )"
       echo "KV_PERSIST=1: kv-persistence not found at $KVP_REPO -- using the fallback namespace hash." >&2
-      echo "              Install kv-persistence (git clone https://github.com/sikkatu/kv-persistence) for the full identity gate." >&2
+      echo "              The fallback covers weights+tokenizer+template+engine args but NOT the full identity gate;" >&2
+      echo "              install kv-persistence (git clone https://github.com/sikkatu/kv-persistence) for the verified one." >&2
     fi
     [ -n "$KV_PERSIST_NAMESPACE" ] || die "KV_PERSIST=1 requires MODEL_DIR (local checkpoint) to derive the cache-identity namespace.
 Remote fetch (MODEL_DIR unset) cannot be namespace-isolated: the engine reports the
@@ -522,7 +588,7 @@ accept that remote-fetch deployments of the same HF id share cache blocks."
   MODEL_ARGS+=(--enable-prompt-tokens-details)
   # Pin the KV block size explicitly: the kv-persistence identity pin
   # (KVP_BLOCK_SIZE) must match a verifiable engine argument.
-  MODEL_ARGS+=(--block-size "${BLOCK_SIZE:-16}")
+  MODEL_ARGS+=(--block-size "$KV_PERSIST_BLOCK_SIZE")
   echo "KV_PERSIST=1: identity-check your deployment BEFORE trusting cached data:"
   echo "  bash \$KVP_REPO/scripts/verify-engine-identity.sh $CONTAINER   # exit 4/5 = do NOT reuse cache"
 fi

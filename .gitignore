@@ -7,3 +7,4 @@ __pycache__/
 tp4.env
 live/
 *.env.local
+kvp-model-name.err
