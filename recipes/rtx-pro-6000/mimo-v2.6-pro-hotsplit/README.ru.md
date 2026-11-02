@@ -251,18 +251,44 @@ MiMo-V2.6-Pro маршрутизирует 8 из 384 экспертов в ка
 в контейнере (измените вызов лаунчера) — ничего вне контейнера не изменяется.
 
 ## Опционально: постоянный KV-кэш (kv-persistence)
-
 Для длинных историй чата (от 100 тыс. токенов) вычисленные KV-блоки могут сохраняться
 при перезапуске vLLM — через внешний сервис кэша
 ([kv-persistence](https://github.com/sikkatu/kv-persistence)). В рецепте есть
-**опциональная** интеграция, по умолчанию ВЫКЛ — без `KV_PERSIST` ничего не меняется:
+**опциональная** интеграция, по умолчанию ВЫКЛ — без `KV_PERSIST` ничего не меняется.
+**При `KV_PERSIST=1` лаунчер делает ЧЕТЫРЕ вещи** (правка ревью):
+1. **Namespace идентичности кэша**: `MODEL_DIR` монтируется в `/models/<namespace>`
+   (НЕ `/model`), поэтому `model_config.model` — строка, по которой LMCache ключует
+   каждый L2-объект, — уникальна для каждой идентичности. Разные ревизии / KV-dtype /
+   геометрии никогда не читают чужие KV-блоки (безопасный промах, никогда неверное
+   попадание). Namespace берётся из `kvpersist.cli model-name`, если найден клон
+   kv-persistence (`KVP_REPO_ROOT` или `~/kv-persistence`), иначе — из
+   детерминированного хэша полей, влияющих на совместимость KV. Поэтому для
+   `KV_PERSIST=1` **обязателен** `MODEL_DIR` — удалённую загрузку нельзя изолировать
+   по ревизиям.
+2. `--kv-transfer-config` (коннектор LMCache `LMCacheMPConnector`).
+3. `--enable-prompt-tokens-details` — без него `cached_tokens` (единственный
+   машиночитаемый счётчик переиспользования) не сообщается, и приёмочный прогон
+   kv-persistence (`scripts/test-recovery.sh`) никогда не даст PASS.
+4. фиксируется `--block-size 16`, чтобы у `kv-persistence/scripts/verify-engine-identity.sh`
+   был проверяемый аргумент движка (запустите его по контейнеру ДО того, как
+   доверять закэшированным данным — выход 4/5 = кэш переиспользовать НЕЛЬЗЯ).
 
+Настройка:
 1. Запустите сервис кэша (см. его wiki):
    `bash scripts/start-cache.sh` из клона kv-persistence.
 2. Укажите `KV_PERSIST=1` (и `KV_PERSIST_HOST` / `KV_PERSIST_PORT`, если сервис
    не на loopback `127.0.0.1:5555`) в `tp4.env` и запустите лаунчер как обычно:
    `bash scripts/run-tp4-uva.sh` (или `run-tp4-hotsplit.sh`).
 
-Лаунчер только добавляет `--kv-transfer-config` (LMCache `LMCacheMPConnector`);
-все остальные аргументы, патчи и образ остаются теми же. Полная настройка, проверка
-персистентности и откат — в [wiki kv-persistence](https://github.com/sikkatu/kv-persistence/wiki).
+**Имена портов на обеих сторонах** (три разные переменные для одной точки):
+сервис кэша слушает `LMCACHE_PORT` (kv-persistence,
+`configs/generic/lmcache-server.env`, также `KVP_LMCACHE_PORT` в `cache.env`),
+а этот рецепт подключается через `KV_PERSIST_PORT` (по умолчанию 5555). Если вы
+меняете порт на стороне кэша — укажите здесь ТО ЖЕ значение `KV_PERSIST_PORT`,
+иначе vLLM не найдёт кэш. То же с хостом: `LMCACHE_HOST` (сторона кэша) ↔
+`KV_PERSIST_HOST` (сторона рецепта).
+
+Полная настройка, проверка персистентности и откат — в
+[wiki kv-persistence](https://github.com/sikkatu/kv-persistence/wiki). Приёмочный
+прогон восстановления (`test-recovery.sh`) всё ещё требует запуска на GPU-хосте —
+честный статус см. в `docs/final-report.md` kv-persistence.

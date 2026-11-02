@@ -137,9 +137,9 @@ MODEL_DIR="${MODEL_DIR:-}"
 CONTAINER="${CONTAINER:-mimo-pro-tp4-uva}"
 PORT="${PORT:-30007}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-1048576}"   # 1M context by default (model max_position_embeddings=1048576)
-KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"        # auto = bf16; fp8 halves KV memory (use for long context)
+KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-bfloat16}"   # vLLM CacheDType spelling: bfloat16 (was auto=bf16); fp8 halves KV memory (use for long context)
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"   # long-context prefill (1M context default)
-MAX_NUM_SEQS="${MAX_NUM_SEQS:-1}"
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-2}"
 CPU_OFFLOAD_GB="${CPU_OFFLOAD_GB:-128}"
 GPU_UTIL="${GPU_UTIL:-0.85}"
 MOE_BACKEND="${MOE_BACKEND:-humming}"       # OBSERVED on target hardware: triton rejects MoEActivation.SILU for MiMo;
@@ -284,8 +284,28 @@ for mod in ["vllm.model_executor.models.mimo_v2","vllm.model_executor.models.mim
 fi
 # --- persistent KV cache (kv-persistence; see github.com/sikkatu/kv-persistence) -----------------
 # OFF by default (KV_PERSIST unset/0 changes nothing). When KV_PERSIST=1 the launcher
-# attaches the external LMCache connector without touching anything else: the same
-# image, patches and arguments, only --kv-transfer-config is appended.
+# attaches the external LMCache connector and additionally guarantees the KV
+# cache identity namespace (see the LONG note below), passes
+# --enable-prompt-tokens-details (needed for cached_tokens / acceptance runs)
+# and pins --block-size so the kv-persistence identity gate can verify it.
+# Every other argument, patch and the image stay identical.
+#
+# WHY THE NAMESPACE STEP (review fix): LMCache derives its cache identity
+# (ObjectKey + L2 file name) from vLLM's `model_config.model` = whatever
+# `--model` was passed. The plain recipe mounts MODEL_DIR at /model, so EVERY
+# deployment would register the same LMCache model_name and different
+# revisions/dtypes/geometries would share one L2 namespace. kv-persistence's
+# own launcher (run-vllm-with-persist.sh) fixed this by mounting the model
+# under a namespace-coded path derived from the verified cache identity. This
+# block applies the SAME mechanism here:
+#   1. prefer the real identity hash from a local kv-persistence checkout
+#      (KVP_REPO_ROOT / ~/kv-persistence): `python3 -m kvpersist.cli model-name`;
+#   2. fall back to a deterministic hash of the fields that actually change
+#      KV compatibility (weights files, config.json, kv-cache dtype,
+#      max-model-len, block size) when kv-persistence is not installed.
+# The result is a path like /models/<namespace>; the engine then reports that
+# path as model_config.model and incompatible deployments can never read each
+# other's KV blocks (a safe cache miss, never a wrong hit).
 KV_PERSIST="${KV_PERSIST:-0}"
 if [ "$KV_PERSIST" = "1" ]; then
   KV_PERSIST_HOST="${KV_PERSIST_HOST:-127.0.0.1}"
@@ -293,9 +313,65 @@ if [ "$KV_PERSIST" = "1" ]; then
   case "$KV_PERSIST_HOST:$KV_PERSIST_PORT" in
     *[^0-9a-zA-Z.\[\]:-]*) die "KV_PERSIST_HOST/PORT contain unexpected characters" ;;
   esac
+  # --- cache-identity namespace (identical purpose to kv-persistence round 13)
+  KV_PERSIST_NAMESPACE="${KV_PERSIST_NAMESPACE:-}"
+  if [ -z "$KV_PERSIST_NAMESPACE" ]; then
+    KVP_REPO="${KVP_REPO_ROOT:-$HOME/kv-persistence}"
+    if [ -n "$MODEL_DIR" ] && [ -f "$KVP_REPO/implementation/kvpersist/cli.py" ]; then
+      KV_PERSIST_NAMESPACE="$(KVP_REPO_ROOT="$KVP_REPO" KVP_SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}" \
+        PYTHONPATH="$KVP_REPO/implementation${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 -m kvpersist.cli model-name 2>/dev/null | tail -1 || true)"
+    fi
+    if [ -z "$KV_PERSIST_NAMESPACE" ] && [ -n "$MODEL_DIR" ]; then
+      # Deterministic fallback: hash everything that changes KV compatibility.
+      KV_PERSIST_NAMESPACE="kvp-$(BLOCK_SIZE="${BLOCK_SIZE:-16}" python3 - "$MODEL_DIR" "$KV_CACHE_DTYPE" "$MAX_MODEL_LEN" <<'PYEOF'
+import hashlib, json, os, sys
+model_dir, kv_dtype, max_len = sys.argv[1:4]
+h = hashlib.sha256()
+for name in ("config.json",) + tuple(sorted(
+        f for f in os.listdir(model_dir) if f.endswith(".index.json"))):
+    p = os.path.join(model_dir, name)
+    if os.path.isfile(p):
+        h.update(open(p, "rb").read())
+for f in sorted(f for f in os.listdir(model_dir)
+                if f.endswith((".safetensors", ".bin", ".pt", ".gguf"))):
+    p = os.path.join(model_dir, f)
+    h.update(f.encode())
+    h.update(str(os.path.getsize(p)).encode())
+h.update(("|kv=%s|maxlen=%s|blk=%s" % (kv_dtype, max_len, os.environ.get("BLOCK_SIZE", "16"))).encode())
+print(h.hexdigest()[:16])
+PYEOF
+)"
+      echo "KV_PERSIST=1: kv-persistence not found at $KVP_REPO -- using the fallback namespace hash." >&2
+      echo "              Install kv-persistence (git clone https://github.com/sikkatu/kv-persistence) for the full identity gate." >&2
+    fi
+    [ -n "$KV_PERSIST_NAMESPACE" ] || die "KV_PERSIST=1 requires MODEL_DIR (local checkpoint) to derive the cache-identity namespace.
+Remote fetch (MODEL_DIR unset) cannot be namespace-isolated: the engine reports the
+HF id as model_config.model, so two revisions of one HF id would share one L2
+namespace. Use MODEL_DIR=<local checkpoint dir> (same requirement as
+kv-persistence's own launcher), or set KV_PERSIST_NAMESPACE explicitly ONLY if you
+accept that remote-fetch deployments of the same HF id share cache blocks."
+  fi
+  # Mount the model under the namespace path so model_config.model is unique
+  # per identity (LMCache keys L2 objects by exactly that string).
+  if [ -n "$MODEL_DIR" ]; then
+    MODEL_MOUNT="/models/$KV_PERSIST_NAMESPACE"
+    MOUNTS+=(-v "$MODEL_DIR:$MODEL_MOUNT:ro")
+    MODEL_ARGS=(--model "$MODEL_MOUNT")
+  fi
   KV_TRANSFER_CONFIG="{\"kv_connector\":\"LMCacheMPConnector\",\"kv_connector_module_path\":\"lmcache.integration.vllm.lmcache_mp_connector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"lmcache.mp.host\":\"tcp://$KV_PERSIST_HOST\",\"lmcache.mp.port\":\"$KV_PERSIST_PORT\"}}"
   echo "KV_PERSIST=1: attaching LMCache connector at $KV_PERSIST_HOST:$KV_PERSIST_PORT (wiki: kv-persistence)"
+  echo "KV_PERSIST=1: cache-identity namespace -> ${MODEL_MOUNT:-$MODEL_ARG} (incompatible deployments get a safe cache miss)"
   MODEL_ARGS+=(--kv-transfer-config "$KV_TRANSFER_CONFIG")
+  # cached_tokens (usage.prompt_tokens_details) is the ONLY machine-readable
+  # reuse counter -- without this flag the kv-persistence acceptance run
+  # (test-recovery.sh) can never PASS (review fix).
+  MODEL_ARGS+=(--enable-prompt-tokens-details)
+  # Pin the KV block size explicitly: the kv-persistence identity pin
+  # (KVP_BLOCK_SIZE) must match a verifiable engine argument.
+  MODEL_ARGS+=(--block-size "${BLOCK_SIZE:-16}")
+  echo "KV_PERSIST=1: identity-check your deployment BEFORE trusting cached data:"
+  echo "  bash \$KVP_REPO/scripts/verify-engine-identity.sh $CONTAINER   # exit 4/5 = do NOT reuse cache"
 fi
 docker run -d --name "$CONTAINER" --restart no \
   --gpus all --ipc host --network host \

@@ -45,8 +45,8 @@
 # --- сервер -------------------------------------------------------------------------------------
 # MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD     # пример; иначе MODEL_ID скачивается в ~/.cache/huggingface
 MAX_MODEL_LEN=1048576        # контекст 1M -- дефолт лаунчера (KV ~13.5 GiB/GPU в bf16 -- см. Известные ограничения)
-MAX_NUM_SEQS=1
-KV_CACHE_DTYPE=auto          # auto = bf16 (рекомендуется: полная точность); fp8 вдвое меньше KV-памяти (только для очень длинного контекста)
+MAX_NUM_SEQS=2
+KV_CACHE_DTYPE=bfloat16     # написание из vLLM CacheDType (auto тоже даёт bf16); fp8 вдвое меньше KV-памяти (только для очень длинного контекста)
 MAX_NUM_BATCHED_TOKENS=8192  # длинный prefill
 # prefix caching ВКЛЮЧЕН по умолчанию (enable_prefix_caching=True в закреплённом билде vLLM):
 # повторяющиеся префиксы промптов берутся из KV-кэша (дешёвые кэшированные токены как у облачных провайдеров).
@@ -112,9 +112,20 @@ HOTSPLIT_MAX_TOKENS=8192                 # лимит токенов живог�
 # (сравните со своим списком проверенных).
 # --- постоянный KV-кэш (интеграция kv-persistence; по умолчанию ВЫКЛ) --------------------------
 # Подключаем отдельный LMCache-сервис (github.com/sikkatu/kv-persistence), чтобы KV-блоки
-# промптов переживали перезапуск vLLM. По умолчанию 0 = рецепт работает ТОЧНО как раньше;
-# флаг добавляет --kv-transfer-config только когда равен 1. Сервис lmcache должен быть уже
-# запущен (kv-persistence: scripts/start-cache.sh).
+# промптов переживали перезапуск vLLM. По умолчанию 0 = рецепт работает ТОЧНО как раньше.
+# При значении 1 лаунчер делает ЧЕТЫРЕ вещи (правка ревью):
+#   1. монтирует MODEL_DIR в /models/<namespace идентичности кэша> вместо /model,
+#      чтобы несовместимые деплои (другая ревизия/dtype/геометрия) никогда не читали
+#      чужие KV-блоки — LMCache ключует L2-объекты по model_config.model;
+#   2. добавляет --kv-transfer-config (коннектор LMCache);
+#   3. добавляет --enable-prompt-tokens-details (cached_tokens в usage — единственный
+#      машиночитаемый счётчик переиспользования; нужен для приёмки kv-persistence);
+#   4. фиксирует --block-size, чтобы гейт идентичности kv-persistence мог его проверить.
+# Сервис lmcache должен быть уже запущен (kv-persistence: scripts/start-cache.sh).
+# Для KV_PERSIST=1 обязателен MODEL_DIR (namespace выводится из локального чекпоинта;
+# удалённую загрузку нельзя изолировать по ревизиям).
 # KV_PERSIST=1
 # KV_PERSIST_HOST=127.0.0.1   # хост lmcache (loopback; см. docs kv-persistence)
 # KV_PERSIST_PORT=5555       # порт lmcache (ZMQ)
+# KV_PERSIST_NAMESPACE=      # переопределить выведенный namespace (для продвинутых; оставьте пустым)
+# BLOCK_SIZE=16              # размер KV-блока, фиксируемый через --block-size (должен совпадать с KVP_BLOCK_SIZE)

@@ -218,17 +218,35 @@ MiMo-V2.6-Pro 在 69 个 MoE 层中的每一层从 384 个专家中路由 8 个�
 或在容器中不设置 `HOTSPLIT_COUNTS` 重新启动（编辑启动脚本调用）—— 容器外不做任何修改。
 
 ## 可选：持久化 KV 缓存（kv-persistence）
-
 对于超长聊天历史（10 万+ token），已计算的 KV 块可以在 vLLM 重启后保留——通过外部缓存服务
 （[kv-persistence](https://github.com/sikkatu/kv-persistence)）。配方中带有**可选**集成，
-默认关闭——不设置 `KV_PERSIST` 时行为完全不变：
+默认关闭——不设置 `KV_PERSIST` 时行为完全不变。**设置 `KV_PERSIST=1` 时启动器做四件事**（评审修正）：
+1. **缓存身份命名空间**：`MODEL_DIR` 挂载到 `/models/<命名空间>`（而非 `/model`），因此
+   `model_config.model`（LMCache 用它为每个 L2 对象做键的字符串）对每个身份唯一。
+   不同版本 / KV dtype / 几何配置绝不会读到彼此的 KV 块（安全的缓存未命中，绝不会错误命中）。
+   命名空间优先取自 `kvpersist.cli model-name`（若找到 kv-persistence 克隆
+   `KVP_REPO_ROOT` 或 `~/kv-persistence`），否则由 KV 兼容性字段的确定性哈希生成。
+   因此 `KV_PERSIST=1` **必须设置** `MODEL_DIR` —— 远程拉取无法按版本隔离。
+2. 追加 `--kv-transfer-config`（LMCache `LMCacheMPConnector`）。
+3. 追加 `--enable-prompt-tokens-details` —— 没有它就不会上报 `cached_tokens`（唯一的
+   机器可读复用计数器），kv-persistence 的验收测试（`scripts/test-recovery.sh`）永远无法 PASS。
+4. 固定 `--block-size 16`，使 `kv-persistence/scripts/verify-engine-identity.sh` 有可验证的
+   引擎参数（在信任缓存数据之前对容器运行它 —— 退出码 4/5 表示**不得**复用缓存）。
 
+安装步骤：
 1. 启动缓存服务（见其 wiki）：
    在 kv-persistence 的克隆中执行 `bash scripts/start-cache.sh`。
 2. 在 `tp4.env` 中设置 `KV_PERSIST=1`（如缓存服务不在回环 `127.0.0.1:5555`，
    还需设置 `KV_PERSIST_HOST` / `KV_PERSIST_PORT`），然后照常启动：
    `bash scripts/run-tp4-uva.sh`（或 `run-tp4-hotsplit.sh`）。
 
-启动脚本仅追加 `--kv-transfer-config`（LMCache `LMCacheMPConnector`）；
-其他所有参数、补丁与镜像保持不变。完整安装、持久化验证与回滚见
-[kv-persistence wiki](https://github.com/sikkatu/kv-persistence/wiki)。
+**两端的端口变量名**（同一端点的三个不同变量名）：缓存服务监听 `LMCACHE_PORT`
+（kv-persistence `configs/generic/lmcache-server.env`，亦即 `cache.env` 中的
+`KVP_LMCACHE_PORT`），本配方通过 `KV_PERSIST_PORT` 连接（默认 5555）。若在缓存侧
+改了端口，请在此处设置相同的 `KV_PERSIST_PORT` 值，否则 vLLM 找不到缓存。主机同理：
+`LMCACHE_HOST`（缓存侧）↔ `KV_PERSIST_HOST`（配方侧）。
+
+完整安装、持久化验证与回滚见
+[kv-persistence wiki](https://github.com/sikkatu/kv-persistence/wiki)。恢复验收
+（`test-recovery.sh`）仍需 GPU 主机实际运行 —— 诚实状态见 kv-persistence 的
+`docs/final-report.md`。

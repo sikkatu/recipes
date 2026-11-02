@@ -1,15 +1,27 @@
 """Persistent KV cache integration (kv-persistence) — contract tests.
-
 The recipe launchers carry an OPT-IN integration with the external LMCache
 cache service (github.com/sikkatu/kv-persistence). The contract:
-
 * OFF by default: with KV_PERSIST unset or 0 the launchers behave exactly as
-  before — no connector, no new arguments, nothing changes.
-* ON (KV_PERSIST=1): the launchers append ONLY `--kv-transfer-config` pointing
-  at the cache service; image, patches and every other argument stay identical.
+  before — no connector, no namespace remount, no new arguments, nothing
+  changes. The plain run needs no MODEL_DIR and no kv-persistence install.
+* ON (KV_PERSIST=1) the launcher does FOUR things (review fix):
+  1. mounts MODEL_DIR at /models/<cache-identity namespace> instead of /model,
+     so model_config.model (the string LMCache keys L2 objects by) is unique
+     per identity — incompatible revisions/dtypes/geometries can never read
+     each other's KV blocks. The namespace comes from `kvpersist.cli
+     model-name` (verified kv-persistence identity) or a deterministic hash of
+     the KV-compatibility fields. MODEL_DIR is required (remote fetch cannot be
+     isolated per revision).
+  2. appends --kv-transfer-config pointing at the cache service;
+  3. appends --enable-prompt-tokens-details (cached_tokens — the only
+     machine-readable reuse counter; the kv-persistence acceptance run needs it);
+  4. pins --block-size so the kv-persistence identity gate can verify it.
 * The knob block is present in all three tp4.env.example locales with the same
   variable names, values and order (locale-parity contract).
-* No secrets: only host/port knobs exist; no key material in the block.
+* No secrets: only host/port/namespace knobs exist; no key material in the block.
+Note: these are CONTRACT tests (they verify the launchers carry the machinery).
+They do NOT prove real NVMe recovery — that needs a GPU-host run of
+kv-persistence's scripts/test-recovery.sh (see kv-persistence docs/final-report.md).
 """
 from __future__ import annotations
 
@@ -94,3 +106,69 @@ def test_off_state_adds_no_arguments():
         outside = [ln for ln in seg.splitlines()
                    if "MODEL_ARGS+=" in ln and not ln.startswith("  ")]
         assert not outside, f"{p.name}: MODEL_ARGS modified outside KV_PERSIST branch: {outside}"
+
+
+# --- review round: cache-identity namespace + acceptance flags ----------------
+
+
+def test_namespace_mechanism_present():
+    """Review fix: the plain recipe mounted MODEL_DIR at /model, so EVERY
+    deployment registered one LMCache model_name -- incompatible revisions /
+    dtypes / geometries silently shared one L2 namespace. The KV_PERSIST block
+    must mount the model under a namespace-coded path instead."""
+    for p in LAUNCHERS:
+        text = p.read_text()
+        assert "KV_PERSIST_NAMESPACE" in text, f"{p.name}: no namespace derivation"
+        assert "/models/" in text, f"{p.name}: model must be mounted under /models/<namespace>"
+        assert 'MODEL_ARGS=(--model "$MODEL_MOUNT")' in text, (
+            f"{p.name}: --model must point at the namespace mount, not /model"
+        )
+        assert "kvpersist.cli model-name" in text, (
+            f"{p.name}: must prefer the verified kv-persistence identity hash"
+        )
+        # deterministic fallback hash must cover the KV-compatibility fields
+        assert "config.json" in text and "kv_dtype" in text, (
+            f"{p.name}: fallback namespace must hash config + kv dtype"
+        )
+        # remote fetch cannot be namespace-isolated -> must refuse, not share
+        assert "requires MODEL_DIR" in text, (
+            f"{p.name}: remote fetch (MODEL_DIR unset) must be refused for KV_PERSIST=1"
+        )
+
+
+def test_acceptance_flags_present():
+    """Review fix: without --enable-prompt-tokens-details the acceptance run
+    (kv-persistence test-recovery.sh) can never PASS -- cached_tokens is the
+    only machine-readable reuse counter. And --block-size must be pinned so
+    the identity gate has a verifiable engine argument."""
+    for p in LAUNCHERS:
+        text = p.read_text()
+        assert "MODEL_ARGS+=(--enable-prompt-tokens-details)" in text, (
+            f"{p.name}: --enable-prompt-tokens-details missing in KV_PERSIST branch"
+        )
+        assert "MODEL_ARGS+=(--block-size" in text, (
+            f"{p.name}: --block-size must be pinned in KV_PERSIST branch"
+        )
+
+
+def test_off_state_needs_no_model_dir():
+    """The namespace mechanism must live INSIDE the KV_PERSIST branch: the
+    plain (KV_PERSIST=0) run must keep working with or without MODEL_DIR."""
+    for p in LAUNCHERS:
+        text = p.read_text()
+        seg = text[text.index('KV_PERSIST="${KV_PERSIST:-0}"'):text.index('docker run -d --name')]
+        outside = [ln for ln in seg.splitlines()
+                   if "KV_PERSIST_NAMESPACE=" in ln and not ln.startswith("  ")]
+        assert not outside, (
+            f"{p.name}: namespace derivation outside the KV_PERSIST branch: {outside}"
+        )
+
+
+def test_identity_gate_reminder_present():
+    """The block must tell the operator to verify the engine identity before
+    trusting cached data (kv-persistence's verify-engine-identity.sh)."""
+    for p in LAUNCHERS:
+        text = p.read_text()
+        assert "verify-engine-identity.sh" in text, (
+            f"{p.name}: KV_PERSIST block must point at the identity gate"
+        )

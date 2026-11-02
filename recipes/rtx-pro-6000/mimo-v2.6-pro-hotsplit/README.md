@@ -165,14 +165,38 @@ MiMo-V2.6-Pro routes 8 of 384 experts in each of 69 MoE layers; at ~19 MiB per e
 Long chat-history prompts (100k+ tokens) can keep their computed KV blocks across
 vLLM restarts via an external cache service ([kv-persistence](https://github.com/sikkatu/kv-persistence)).
 The recipe carries an **opt-in** integration, off by default — with `KV_PERSIST` unset
-nothing changes:
+nothing changes. **With `KV_PERSIST=1` the launcher does FOUR things** (review fix):
+1. **Cache-identity namespace**: `MODEL_DIR` is mounted at `/models/<namespace>` (NOT
+   `/model`), so `model_config.model` — the string LMCache keys every L2 object by —
+   is unique per identity. Different revisions / KV dtypes / geometries can then
+   never read each other's KV blocks (a safe cache miss, never a wrong hit). The
+   namespace comes from `kvpersist.cli model-name` when a kv-persistence checkout is
+   found (`KVP_REPO_ROOT` or `~/kv-persistence`), else from a deterministic hash of
+   the KV-compatibility fields. `MODEL_DIR` is therefore **required** for
+   `KV_PERSIST=1` — remote fetch cannot be isolated per revision.
+2. `--kv-transfer-config` (LMCache `LMCacheMPConnector`).
+3. `--enable-prompt-tokens-details` — without it `cached_tokens` (the only
+   machine-readable reuse counter) is never reported and the kv-persistence
+   acceptance run (`scripts/test-recovery.sh`) can never PASS.
+4. `--block-size 16` pinned, so `kv-persistence/scripts/verify-engine-identity.sh`
+   has a verifiable engine argument (run it against the container BEFORE trusting
+   cached data — exit 4/5 means do NOT reuse the cache).
 
+Setup:
 1. Start the cache service (see its wiki):
    `bash scripts/start-cache.sh` from a clone of kv-persistence.
 2. Set `KV_PERSIST=1` (and `KV_PERSIST_HOST` / `KV_PERSIST_PORT` if the cache service
    is not on loopback `127.0.0.1:5555`) in `tp4.env`, then launch as usual:
    `bash scripts/run-tp4-uva.sh` (or `run-tp4-hotsplit.sh`).
 
-The launcher only appends `--kv-transfer-config` (LMCache `LMCacheMPConnector`); all
-other arguments, patches and the image stay identical. Full setup, persistence
-verification and rollback: the [kv-persistence wiki](https://github.com/sikkatu/kv-persistence/wiki).
+**Port names on both sides** (they are three different variables for the same
+endpoint): the cache service listens on `LMCACHE_PORT` (kv-persistence
+`configs/generic/lmcache-server.env`, also `KVP_LMCACHE_PORT` in `cache.env`), while
+this recipe connects with `KV_PERSIST_PORT` (default 5555). If you change the port on
+the cache side, set `KV_PERSIST_PORT` here to the SAME value or vLLM cannot reach the
+cache. Same for the host: `LMCACHE_HOST` (cache side) ↔ `KV_PERSIST_HOST` (recipe side).
+
+Full setup, persistence verification and rollback: the
+[kv-persistence wiki](https://github.com/sikkatu/kv-persistence/wiki). Recovery
+acceptance (`test-recovery.sh`) still requires a GPU host run — see kv-persistence
+`docs/final-report.md` for the honest status.
