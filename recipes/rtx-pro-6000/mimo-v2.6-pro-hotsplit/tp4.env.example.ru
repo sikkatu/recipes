@@ -46,6 +46,8 @@
 # MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD     # пример; иначе MODEL_ID скачивается в ~/.cache/huggingface
 MAX_MODEL_LEN=1048576        # контекст 1M -- дефолт лаунчера (KV ~13.5 GiB/GPU в bf16 -- см. Известные ограничения)
 MAX_NUM_SEQS=2
+TP_SIZE=4                    # tensor-parallel размер; должен совпадать с движком (--tensor-parallel-size). Входит в namespace KV-кэша при KV_PERSIST=1
+SERVED_MODEL_NAME=mimo-pro    # --served-model-name движка; входит в namespace KV-кэша при KV_PERSIST=1
 KV_CACHE_DTYPE=auto          # auto = дефолт модели (bf16 для MiMo; ПРОВЕРЕННЫЕ бенчмарки шли на auto); fp8 вдвое меньше KV-памяти (только для очень длинного контекста)
 MAX_NUM_BATCHED_TOKENS=8192  # длинный prefill
 # prefix caching ВКЛЮЧЕН по умолчанию (enable_prefix_caching=True в закреплённом билде vLLM):

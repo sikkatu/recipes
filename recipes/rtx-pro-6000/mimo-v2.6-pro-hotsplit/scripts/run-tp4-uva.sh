@@ -340,7 +340,10 @@ try:
 except Exception:
     print("auto")
     raise SystemExit(0)
-for key in ("torch_dtype", "dtype", "moe_router_dtype"):
+# Review fix: do NOT fall back to moe_router_dtype -- that is the ROUTER dtype,
+# not the KV dtype; falling back to it would resolve `auto` to a wrong value
+# and desync the namespace from what the engine actually computes KV with.
+for key in ("torch_dtype", "dtype"):
     v = cfg.get(key)
     if isinstance(v, str) and v.strip():
         print(v.strip().lower())
@@ -448,9 +451,9 @@ docker run -d --name "$CONTAINER" --restart no \
   -e "VLLM_API_KEY=$API_KEY" \
   "${MOUNTS[@]}" "$IMAGE" \
   "${MODEL_ARGS[@]}" \
-  --served-model-name mimo-pro \
+  --served-model-name "${SERVED_MODEL_NAME:-mimo-pro}" \
   --trust-remote-code \
-  --tensor-parallel-size 4 \
+  --tensor-parallel-size "${TP_SIZE:-4}" \
   --disable-custom-all-reduce \
   --offload-backend uva \
   --cpu-offload-gb "$CPU_OFFLOAD_GB" \

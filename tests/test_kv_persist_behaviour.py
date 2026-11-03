@@ -292,3 +292,41 @@ def test_kv_cache_dtype_auto_resolves_to_model_dtype(lp, tmp_path):
         "as an explicit 'bfloat16' launch (the namespace must reflect the "
         "EFFECTIVE dtype, not the literal string)"
     )
+
+
+@pytest.mark.parametrize("lp", LAUNCHERS)
+def test_namespace_matches_engine_args(lp, tmp_path):
+    """Review fix (round 21): SERVED_MODEL_NAME and TP_SIZE used to feed the
+    NAMESPACE while the engine was started with the hardcoded constants
+    `mimo-pro` / `4`. If someone exported TP_SIZE=2, the namespace claimed
+    tp=2 while the engine ran tp=4 -- and could collide with a REAL tp=2
+    deployment's cache. Now the engine args follow the same variables: the
+    namespace and --tensor-parallel-size / --served-model-name must agree."""
+    env, log, cli_env_log = _install_stubs(tmp_path)
+    r = _run(lp, env, {"API_KEY": "secret", "IMAGE": "x@sha256:" + "a" * 64,
+                       "ALLOW_RUN": "1", "KV_PERSIST": "1",
+                       "TP_SIZE": "2", "SERVED_MODEL_NAME": "my-deployment"})
+    rec = json.loads(cli_env_log.read_text())
+    assert rec["KVP_TP_SIZE"] == "2", (
+        f"KVP_TP_SIZE must follow TP_SIZE (got {rec['KVP_TP_SIZE']!r})"
+    )
+    assert rec["KVP_SERVED_MODEL_NAME"] == "my-deployment", (
+        f"KVP_SERVED_MODEL_NAME must follow SERVED_MODEL_NAME "
+        f"(got {rec['KVP_SERVED_MODEL_NAME']!r})"
+    )
+    stub = Path(env["STUB_LOG"]).read_text() if Path(env["STUB_LOG"]).exists() else ""
+    runs = [l for l in stub.splitlines()
+            if "docker run " in l and "--rm" not in l and "STUB_DOCKER_RUN" in stub]
+    joined = "\n".join(runs)
+    assert "--tensor-parallel-size 2" in joined, (
+        f"the ENGINE must run with --tensor-parallel-size 2 (what the "
+        f"namespace claims), runs:\n{joined}"
+    )
+    assert "--served-model-name my-deployment" in joined, (
+        f"the ENGINE must run with --served-model-name my-deployment (what "
+        f"the namespace claims), runs:\n{joined}"
+    )
+    ns = _namespace_of(r)
+    assert ns and "my-deployment" in ns, (
+        f"the namespace must carry the served-model-name: {ns}"
+    )
