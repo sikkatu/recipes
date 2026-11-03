@@ -476,38 +476,59 @@ if [ "$KV_PERSIST" = "1" ]; then
   case "$KV_PERSIST_HOST:$KV_PERSIST_PORT" in
     *[^0-9a-zA-Z.\[\]:-]*) die "KV_PERSIST_HOST/PORT contain unexpected characters" ;;
   esac
-  # Resolve `auto` -> the model's EFFECTIVE dtype (config.json), so the
-  # namespace matches what the engine actually computes KV with. Without this,
-  # an `auto` launch and a `bfloat16` launch of the same model hashed
-  # DIFFERENT namespaces (harmless miss) while `fp8` hashed the shipped
-  # `bfloat16` pin (DANGEROUS: fp8 KV under a bf16 namespace). The identity
-  # gate (verify-engine-identity.sh) performs the same resolution.
-  KV_EFFECTIVE_DTYPE="$(KV_CACHE_DTYPE="$KV_CACHE_DTYPE" python3 - "$MODEL_DIR" <<'PYEOF'
+  # Review fix (round 23): resolve the EFFECTIVE engine config through the
+  # SAME shared code the namespace derivation uses (kvpersist.cli
+  # effective-identity when a kv-persistence checkout is present, identical
+  # inline rules otherwise) and PERSIST it to $LIVE_DIR/kvp-effective-identity.env.
+  # The manual identity-gate run (reminder at the end of this block) sources
+  # that file, so it compares the container args against the SAME values this
+  # launch hashed the namespace from -- a non-default run (KV_CACHE_DTYPE=fp8,
+  # MAX_MODEL_LEN=524288, TP!=4) verifies clean instead of being blocked by a
+  # MISMATCH against the shipped identity.env pins.
+  KVP_REPO="${KVP_REPO_ROOT:-$HOME/kv-persistence}"
+  _EFF_ENV=""
+  if [ -f "$KVP_REPO/implementation/kvpersist/cli.py" ]; then
+    _EFF_ENV="$(PYTHONPATH="$KVP_REPO/implementation${PYTHONPATH:+:$PYTHONPATH}" \
+      python3 -m kvpersist.cli effective-identity ${MODEL_DIR:+--model-dir "$MODEL_DIR"} 2>/dev/null || true)"
+  fi
+  if [ -z "$_EFF_ENV" ]; then
+    # kv-persistence not importable here -- identical resolution rules.
+  _EFF_ENV="$(python3 - "${MODEL_DIR:-}" <<'PYEFF'
 import json, os, sys
-dtype = os.environ.get("KV_CACHE_DTYPE", "auto").strip().lower()
-if dtype != "auto":
-    print(dtype)
-    raise SystemExit(0)
-try:
-    cfg = json.load(open(os.path.join(sys.argv[1], "config.json")))
-except Exception:
-    print("auto")
-    raise SystemExit(0)
-# Review fix: do NOT fall back to moe_router_dtype -- that is the ROUTER dtype,
-# not the KV dtype; falling back to it would resolve `auto` to a wrong value
-# and desync the namespace from what the engine actually computes KV with.
-for key in ("torch_dtype", "dtype"):
-    v = cfg.get(key)
-    if isinstance(v, str) and v.strip():
-        print(v.strip().lower())
-        raise SystemExit(0)
-print("auto")
-PYEOF
+def pick(*names, default=""):
+    for n in names:
+        v = os.environ.get(n, "").strip()
+        if v:
+            return v
+    return default
+kv_dtype = pick("KV_CACHE_DTYPE", default="auto").lower()
+model_dir = sys.argv[1] if len(sys.argv) > 1 else ""
+if kv_dtype == "auto" and model_dir:
+    try:
+        cfg = json.load(open(os.path.join(model_dir, "config.json")))
+    except Exception:
+        cfg = {}
+    for key in ("torch_dtype", "dtype"):
+        v = cfg.get(key)
+        if isinstance(v, str) and v.strip():
+            kv_dtype = v.strip().lower()
+            break
+print("KVP_SERVED_MODEL_NAME=%s" % pick("SERVED_MODEL_NAME", default="mimo-pro"))
+print("KVP_KV_CACHE_DTYPE=%s" % kv_dtype)
+print("KVP_MAX_MODEL_LEN=%s" % pick("MAX_MODEL_LEN", default="1048576"))
+print("KVP_BLOCK_SIZE=%s" % pick("KV_PERSIST_BLOCK_SIZE", "BLOCK_SIZE", default="16"))
+print("KVP_TP_SIZE=%s" % pick("TP_SIZE", default="4"))
+PYEFF
 )"
+  fi
+  [ -n "$_EFF_ENV" ] || die "cannot resolve the effective engine identity (kvpersist CLI and inline fallback both failed)"
+  printf '%s\n' "$_EFF_ENV" > "$LIVE_DIR/kvp-effective-identity.env"
+  echo "KV_PERSIST=1: effective engine identity saved to $LIVE_DIR/kvp-effective-identity.env"
+  KV_EFFECTIVE_DTYPE="$(printf '%s\n' "$_EFF_ENV" | sed -n 's/^KVP_KV_CACHE_DTYPE=//p')"
+  [ -n "$KV_EFFECTIVE_DTYPE" ] || die "empty effective KV dtype -- cannot derive the cache namespace"
   # --- cache-identity namespace (identical purpose to kv-persistence round 13)
   KV_PERSIST_NAMESPACE="${KV_PERSIST_NAMESPACE:-}"
   if [ -z "$KV_PERSIST_NAMESPACE" ]; then
-    KVP_REPO="${KVP_REPO_ROOT:-$HOME/kv-persistence}"
     if [ -n "$MODEL_DIR" ] && [ -f "$KVP_REPO/implementation/kvpersist/cli.py" ]; then
       # Review fix: pass the REAL engine settings as KVP_* overrides so the
       # namespace changes with them (fp8 KV must NOT hash as bf16). KVP_* env
@@ -517,7 +538,7 @@ PYEOF
       # misleading "kv-persistence not found" message).
       KV_PERSIST_NAMESPACE="$(
         KVP_REPO_ROOT="$KVP_REPO" \
-        KVP_SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}" \
+        KVP_SERVED_MODEL_NAME="${KVP_SERVED_MODEL_NAME:-${SERVED_MODEL_NAME:-mimo-pro}}" \
         KVP_KV_CACHE_DTYPE="$KV_EFFECTIVE_DTYPE" \
         KVP_MAX_MODEL_LEN="$MAX_MODEL_LEN" \
         KVP_BLOCK_SIZE="$KV_PERSIST_BLOCK_SIZE" \
@@ -593,6 +614,7 @@ accept that remote-fetch deployments of the same HF id share cache blocks."
   # (KVP_BLOCK_SIZE) must match a verifiable engine argument.
   MODEL_ARGS+=(--block-size "$KV_PERSIST_BLOCK_SIZE")
   echo "KV_PERSIST=1: identity-check your deployment BEFORE trusting cached data:"
+  echo "  set -a; . $LIVE_DIR/kvp-effective-identity.env; set +a   # SAME effective engine values as this run"
   echo "  bash \$KVP_REPO/scripts/verify-engine-identity.sh $CONTAINER   # exit 4/5 = do NOT reuse cache"
 fi
 docker run -d --name "$CONTAINER" --restart no \

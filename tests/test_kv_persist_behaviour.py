@@ -330,3 +330,38 @@ def test_namespace_matches_engine_args(lp, tmp_path):
     assert ns and "my-deployment" in ns, (
         f"the namespace must carry the served-model-name: {ns}"
     )
+
+
+@pytest.mark.parametrize("lp", LAUNCHERS)
+def test_effective_identity_is_persisted(lp, tmp_path):
+    """Review fix (round 23): the launcher must save the EFFECTIVE engine
+    identity to live/kvp-effective-identity.env through the shared resolver
+    (kvpersist.cli effective-identity), and the manual identity-gate reminder
+    must tell the operator to source that file first -- so the gate compares
+    the container args against the SAME values the namespace was hashed from.
+    A non-default run (KV_CACHE_DTYPE=fp8 / MAX_MODEL_LEN=524288 / TP=2) must
+    not be blocked by MISMATCH against the shipped identity.env pins."""
+    env, log, cli_env_log = _install_stubs(tmp_path)
+    r = _run(lp, env, {"API_KEY": "secret", "IMAGE": "x@sha256:" + "a" * 64,
+                       "ALLOW_RUN": "1", "KV_PERSIST": "1",
+                       "KV_CACHE_DTYPE": "fp8", "MAX_MODEL_LEN": "524288",
+                       "TP_SIZE": "2", "SERVED_MODEL_NAME": "my-dep"})
+    eff = Path(env["LIVE_DIR"]) / "kvp-effective-identity.env"
+    assert eff.exists(), (
+        f"the effective engine identity must be persisted to {eff}:\n"
+        f"{r.stdout[-1500:]}\n{r.stderr[-1500:]}"
+    )
+    vals = dict(l.split("=", 1) for l in eff.read_text().splitlines() if "=" in l)
+    assert vals.get("KVP_KV_CACHE_DTYPE") == "fp8", vals
+    assert vals.get("KVP_MAX_MODEL_LEN") == "524288", vals
+    assert vals.get("KVP_TP_SIZE") == "2", vals
+    assert vals.get("KVP_SERVED_MODEL_NAME") == "my-dep", vals
+    combined = r.stdout + r.stderr
+    assert "kvp-effective-identity.env" in combined, (
+        "the launcher must tell the operator about the persisted effective identity"
+    )
+    assert "verify-engine-identity.sh" in combined
+    assert "set -a" in combined and ". " in combined, (
+        "the manual-gate reminder must source the effective identity file first "
+        f"so the gate sees the same values:\n{combined[-1500:]}"
+    )
