@@ -24,6 +24,9 @@ fi
 echo "== /v1/models =="
 curl -fsS "${AUTH[@]}" "$BASE/v1/models"; echo
 echo "== /v1/chat/completions =="
+# Review fix (round 22): the model name must follow SERVED_MODEL_NAME -- a
+# hardcoded "mimo-pro" gets 404 as soon as the launcher serves another name.
+SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}"
 curl -fsS "${AUTH[@]}" "$BASE/v1/chat/completions" -H 'Content-Type: application/json' \
-  -d '{"model":"mimo-pro","messages":[{"role":"user","content":"Say TP4_OK"}],"max_tokens":64,"temperature":0}'
+  -d "{\"model\":\"$SERVED_MODEL_NAME\",\"messages\":[{\"role\":\"user\",\"content\":\"Say TP4_OK\"}],\"max_tokens\":64,\"temperature\":0}"
 echo

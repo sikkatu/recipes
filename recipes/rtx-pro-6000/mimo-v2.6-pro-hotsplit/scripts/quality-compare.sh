@@ -56,8 +56,10 @@ echo "Server A: $URL_A   (key: $KEY_FILE_A)"
 echo "Server B: $URL_B   (key: $KEY_FILE_B)"
 echo "Report:   $OUTDIR/"
 
+# Review fix (round 22): request the served name, not a hardcoded mimo-pro.
+export SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}"
 python3 - "$URL_A" "$URL_B" "$KEY_A" "$KEY_B" "$OUTDIR" <<'PYEOF'
-import json, sys, urllib.request, difflib, datetime
+import json, os, sys, urllib.request, difflib, datetime
 
 URL_A, URL_B, KEY_A, KEY_B, OUTDIR = sys.argv[1:6]
 
@@ -81,7 +83,7 @@ def model_info(url, key):
         return f"(unreachable: {e})"
 
 def ask(url, key, q, mt):
-    body = json.dumps({"model": "mimo-pro",
+    body = json.dumps({"model": os.environ.get("SERVED_MODEL_NAME", "mimo-pro"),
                        "messages": [{"role": "user", "content": q}],
                        "max_tokens": mt, "temperature": 0}).encode()
     req = urllib.request.Request(url + "/v1/chat/completions", data=body,
@@ -114,7 +116,7 @@ hdr = [
     f"quality-compare report {datetime.datetime.now().isoformat(timespec='seconds')}",
     f"server A: {URL_A}   models: {model_info(URL_A, KEY_A)}",
     f"server B: {URL_B}   models: {model_info(URL_B, KEY_B)}",
-    f"parameters: model=mimo-pro, temperature=0, per-query max_tokens as noted",
+    f"parameters: model={os.environ.get(chr(83)+chr(69)+chr(82)+chr(86)+chr(69)+chr(68)+chr(95)+chr(77)+chr(79)+chr(68)+chr(69)+chr(76)+chr(95)+chr(78)+chr(65)+chr(77)+chr(69), chr(109)+chr(105)+chr(109)+chr(111)+chr(45)+chr(112)+chr(114)+chr(111))}, temperature=0, per-query max_tokens as noted",
     "",
 ]
 

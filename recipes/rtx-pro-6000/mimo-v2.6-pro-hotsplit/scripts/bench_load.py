@@ -14,6 +14,7 @@ Output: per-request rows (topic, round, gen_tok, ttft, decode tok/s),
 per-topic averages and an OVERALL row. Pure stdlib (urllib), no dependencies.
 """
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -41,7 +42,7 @@ TOPICS = [
 
 def ask(topic, prompt, mt):
     """One streaming request. Returns (topic, n_gen, ttft, decode_tok_s, wall)."""
-    body = json.dumps({"model": "mimo-pro",
+    body = json.dumps({"model": os.environ.get("SERVED_MODEL_NAME", "mimo-pro"),
                        "messages": [{"role": "user", "content": prompt}],
                        "max_tokens": mt, "temperature": 0.7,
                        "stream": True,

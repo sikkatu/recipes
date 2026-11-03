@@ -12,8 +12,11 @@
 # Also prints decode speed (tok/s) per call — the first call is slower only because
 # the prompt is a cache MISS (all tokens prefill). Run 2+ vs run 2+ to compare decode.
 
+# Review fix (round 22): the probes must request the name the server is
+# actually served under (SERVED_MODEL_NAME), not a hardcoded mimo-pro.
+export SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}"
 python3 - <<'PYEOF'
-import json, time, urllib.request
+import json, os, time, urllib.request
 
 KEY = open("live/api_key").read().strip()
 BASE = "http://127.0.0.1:30007"
@@ -54,7 +57,7 @@ def log_hit_rates():
     return [ln for ln in out.splitlines() if "Prefix cache hit rate" in ln]
 
 def ask(prompt, max_tokens=50):
-    body = json.dumps({"model": "mimo-pro",
+    body = json.dumps({"model": os.environ.get("SERVED_MODEL_NAME", "mimo-pro"),
                        "messages": [{"role": "user", "content": prompt}],
                        "max_tokens": max_tokens, "temperature": 0}).encode()
     req = urllib.request.Request(BASE + "/v1/chat/completions", data=body,
