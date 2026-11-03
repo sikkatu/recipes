@@ -501,7 +501,7 @@ def pick(*names, default=""):
         if v:
             return v
     return default
-kv_dtype = pick("KV_CACHE_DTYPE", default="auto").lower()
+kv_dtype = pick("KVP_KV_CACHE_DTYPE", "KV_CACHE_DTYPE", default="auto").lower()
 model_dir = sys.argv[1] if len(sys.argv) > 1 else ""
 if kv_dtype == "auto" and model_dir:
     try:
@@ -513,11 +513,11 @@ if kv_dtype == "auto" and model_dir:
         if isinstance(v, str) and v.strip():
             kv_dtype = v.strip().lower()
             break
-print("KVP_SERVED_MODEL_NAME=%s" % pick("SERVED_MODEL_NAME", default="mimo-pro"))
+print("KVP_SERVED_MODEL_NAME=%s" % pick("KVP_SERVED_MODEL_NAME", "SERVED_MODEL_NAME", default="mimo-pro"))
 print("KVP_KV_CACHE_DTYPE=%s" % kv_dtype)
-print("KVP_MAX_MODEL_LEN=%s" % pick("MAX_MODEL_LEN", default="1048576"))
-print("KVP_BLOCK_SIZE=%s" % pick("KV_PERSIST_BLOCK_SIZE", "BLOCK_SIZE", default="16"))
-print("KVP_TP_SIZE=%s" % pick("TP_SIZE", default="4"))
+print("KVP_MAX_MODEL_LEN=%s" % pick("KVP_MAX_MODEL_LEN", "MAX_MODEL_LEN", default="1048576"))
+print("KVP_BLOCK_SIZE=%s" % pick("KVP_BLOCK_SIZE", "KV_PERSIST_BLOCK_SIZE", "BLOCK_SIZE", default="16"))
+print("KVP_TP_SIZE=%s" % pick("KVP_TP_SIZE", "TP_SIZE", default="4"))
 PYEFF
 )"
   fi
@@ -526,6 +526,22 @@ PYEFF
   echo "KV_PERSIST=1: effective engine identity saved to $LIVE_DIR/kvp-effective-identity.env"
   KV_EFFECTIVE_DTYPE="$(printf '%s\n' "$_EFF_ENV" | sed -n 's/^KVP_KV_CACHE_DTYPE=//p')"
   [ -n "$KV_EFFECTIVE_DTYPE" ] || die "empty effective KV dtype -- cannot derive the cache namespace"
+  # Review fix (round 24): SINGLE SOURCE OF TRUTH for the engine args -- the
+  # engine is started with the SAME values the namespace was hashed from.
+  # A conflicting KVP_* export (e.g. KVP_KV_CACHE_DTYPE=fp8 with
+  # KV_CACHE_DTYPE=bfloat16) used to let namespace+gate agree on one value
+  # while docker ran vLLM with the raw operator name -- a desync the resolver
+  # alone could not prevent. Sync the operator vars from the resolved values
+  # so every consumer (docker args, smoke request, namespace, gate) agrees.
+  SERVED_MODEL_NAME="$(printf '%s\n' "$_EFF_ENV" | sed -n 's/^KVP_SERVED_MODEL_NAME=//p')"
+  KV_CACHE_DTYPE="$KV_EFFECTIVE_DTYPE"
+  MAX_MODEL_LEN="$(printf '%s\n' "$_EFF_ENV" | sed -n 's/^KVP_MAX_MODEL_LEN=//p')"
+  KV_PERSIST_BLOCK_SIZE="$(printf '%s\n' "$_EFF_ENV" | sed -n 's/^KVP_BLOCK_SIZE=//p')"
+  TP_SIZE="$(printf '%s\n' "$_EFF_ENV" | sed -n 's/^KVP_TP_SIZE=//p')"
+  [ -n "$SERVED_MODEL_NAME" ] && [ -n "$MAX_MODEL_LEN" ] && [ -n "$KV_PERSIST_BLOCK_SIZE" ] && [ -n "$TP_SIZE" ] \
+    || die "effective identity is incomplete -- refusing to start with desynced engine args"
+  echo "KV_PERSIST=1: engine args synced with the effective identity (served-model-name=$SERVED_MODEL_NAME kv=$KV_CACHE_DTYPE max-len=$MAX_MODEL_LEN block=$KV_PERSIST_BLOCK_SIZE tp=$TP_SIZE)"
+
   # --- cache-identity namespace (identical purpose to kv-persistence round 13)
   KV_PERSIST_NAMESPACE="${KV_PERSIST_NAMESPACE:-}"
   if [ -z "$KV_PERSIST_NAMESPACE" ]; then
@@ -687,9 +703,14 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
   fi
   if curl -fsS --max-time 3 -H "Authorization: Bearer $API_KEY" "http://$URLHOST:$PORT/v1/models" > "$MODELS_JSON" 2>/dev/null; then
     cat "$MODELS_JSON"; echo
+    # Review fix (round 24): the smoke request must use the ACTUAL served model
+    # name (a hard-coded "mimo-pro" got 404 on any other SERVED_MODEL_NAME and
+    # failed the launch). The JSON is built by python3 -- the value is safely
+    # encoded, never interpolated into JSON by hand.
+    SMOKE_BODY="$(python3 -c 'import json,os,sys; print(json.dumps({"model": os.environ.get("SERVED_MODEL_NAME","mimo-pro"), "messages":[{"role":"user","content":"Reply exactly TP4_OK"}], "max_tokens":64, "temperature":0}))')"
     SMOKE_JSON="$(curl -fsS --max-time 120 -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
       "http://$URLHOST:$PORT/v1/chat/completions" \
-      -d '{"model":"mimo-pro","messages":[{"role":"user","content":"Reply exactly TP4_OK"}],"max_tokens":64,"temperature":0}' || true)"
+      -d "$SMOKE_BODY" || true)"
     echo "$SMOKE_JSON"
     # the answer must actually contain TP4_OK: HTTP 200 + a coherent-looking body is not
     # proof of correct weights (the stock loader produced garbage that looked plausible).

@@ -365,3 +365,115 @@ def test_effective_identity_is_persisted(lp, tmp_path):
         "the manual-gate reminder must source the effective identity file first "
         f"so the gate sees the same values:\n{combined[-1500:]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Round 24: conflicting KVP_* vs operator overrides (review item 3).
+# ---------------------------------------------------------------------------
+
+def _docker_args(log: Path) -> str:
+    if not log.exists():
+        return ""
+    return "\n".join(l for l in log.read_text().splitlines()
+                      if "docker run " in l and "--rm" not in l)
+
+
+def _smoke_body(log: Path) -> str:
+    """The smoke request body captured by the curl stub."""
+    if not log.exists():
+        return ""
+    bodies = []
+    for l in log.read_text().splitlines():
+        if "curl" in l and "-d" in l:
+            parts = l.split(" -d ", 1)
+            if len(parts) == 2:
+                bodies.append(parts[1].strip())
+    return "\n".join(bodies)
+
+
+def _run_with_conflict(lp, tmp_path, conflict: dict, docker_check: str):
+    """Run the launcher with conflicting env and assert the docker args carry
+    the RESOLVED value (docker_check is the expected engine arg substring)."""
+    env, log, cli_env_log = _install_stubs(tmp_path)
+    r = _run(lp, env, {"API_KEY": "secret", "IMAGE": "x@sha256:" + "a" * 64,
+                       "ALLOW_RUN": "1", "KV_PERSIST": "1", **conflict})
+    args = _docker_args(log)
+    assert docker_check in args, (
+        f"the ENGINE must run with {docker_check!r} (the resolved effective "
+        f"value), docker args:\n{args}\nlauncher output:\n"
+        f"{r.stdout[-1200:]}\n{r.stderr[-1200:]}"
+    )
+    return r, log, cli_env_log
+
+
+@pytest.mark.parametrize("lp", LAUNCHERS)
+def test_conflicting_overrides_kv_cache_dtype(lp, tmp_path):
+    """KVP_KV_CACHE_DTYPE=fp8 with KV_CACHE_DTYPE=bfloat16: the engine must run
+    --kv-cache-dtype fp8 (the KVP_* value the namespace was hashed from)."""
+    _run_with_conflict(lp, tmp_path,
+                       {"KVP_KV_CACHE_DTYPE": "fp8", "KV_CACHE_DTYPE": "bfloat16"},
+                       "--kv-cache-dtype fp8")
+
+
+@pytest.mark.parametrize("lp", LAUNCHERS)
+def test_conflicting_overrides_tp_size(lp, tmp_path):
+    """KVP_TP_SIZE=2 with TP_SIZE=4: the engine must run --tensor-parallel-size 2."""
+    _run_with_conflict(lp, tmp_path,
+                       {"KVP_TP_SIZE": "2", "TP_SIZE": "4"},
+                       "--tensor-parallel-size 2")
+
+
+@pytest.mark.parametrize("lp", LAUNCHERS)
+def test_conflicting_overrides_block_size(lp, tmp_path):
+    """KVP_BLOCK_SIZE=32 with KV_PERSIST_BLOCK_SIZE=16: the engine must run
+    --block-size 32."""
+    _run_with_conflict(lp, tmp_path,
+                       {"KVP_BLOCK_SIZE": "32", "KV_PERSIST_BLOCK_SIZE": "16"},
+                       "--block-size 32")
+
+
+@pytest.mark.parametrize("lp", LAUNCHERS)
+def test_conflicting_overrides_served_model_name(lp, tmp_path):
+    """KVP_SERVED_MODEL_NAME=my-deployment with SERVED_MODEL_NAME=mimo-pro: the
+    engine must run --served-model-name my-deployment AND the smoke request
+    must use my-deployment (not the stale mimo-pro)."""
+    env, log, cli_env_log = _install_stubs(tmp_path)
+    # a curl stub that logs the request body so the smoke JSON can be checked
+    curl = Path(env["PATH"].split(":")[0]) / "curl"
+    curl.write_text(
+        '#!/usr/bin/env bash\n'
+        'echo "$0 $*" >> "$STUB_LOG"\n'
+        'case "$*" in\n'
+        '  *"/v1/models"*)\n'
+        '    echo \'{"data":[{"id":"probe"}]}\'\n'
+        '    exit 0 ;;\n'
+        '  *"/v1/chat/completions"*)\n'
+        '    body=""\n'
+        '    prev=""\n'
+        '    for a in "$@"; do\n'
+        '      [ "$prev" = "-d" ] && body="$a"\n'
+        '      prev="$a"\n'
+        '    done\n'
+        '    echo "curl -d $body" >> "$STUB_LOG"\n'
+        '    echo \'{"choices":[{"message":{"content":"TP4_OK"},"finish_reason":"stop"}]}\'\n'
+        '    exit 0 ;;\n'
+        'esac\n'
+        'exit 22\n'
+    )
+    curl.chmod(0o755)
+    r = _run(lp, env, {"API_KEY": "secret", "IMAGE": "x@sha256:" + "a" * 64,
+                       "ALLOW_RUN": "1", "KV_PERSIST": "1",
+                       "KVP_SERVED_MODEL_NAME": "my-deployment",
+                       "SERVED_MODEL_NAME": "mimo-pro"})
+    args = _docker_args(log)
+    assert "--served-model-name my-deployment" in args, (
+        f"the ENGINE must run with the resolved served-model-name, docker args:\n{args}"
+    )
+    body = _smoke_body(log)
+    assert "my-deployment" in body, (
+        f"the smoke request must use the resolved served-model-name (my-deployment), "
+        f"got body:\n{body}\n(log:\n{(log.read_text() if log.exists() else '')[-1500:]})"
+    )
+    assert '"model":"mimo-pro"' not in body, (
+        "the smoke request must NOT hard-code mimo-pro"
+    )
