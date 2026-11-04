@@ -482,6 +482,7 @@ accept that remote-fetch deployments of the same HF id share cache blocks."
   MODEL_ARGS+=(--block-size "$KV_PERSIST_BLOCK_SIZE")
   echo "KV_PERSIST=1: identity-check your deployment BEFORE trusting cached data:"
   echo "  set -a; . $LIVE_DIR/kvp-effective-identity.env; set +a   # SAME effective engine values as this run"
+  echo "  export KVP_CACHE_ROOT=...   # the kv-persistence cache root (configs/generic/cache.env)"
   echo "  bash \$KVP_REPO/scripts/verify-engine-identity.sh $CONTAINER   # exit 4/5 = do NOT reuse cache"
 fi
 docker run -d --name "$CONTAINER" --restart no \
