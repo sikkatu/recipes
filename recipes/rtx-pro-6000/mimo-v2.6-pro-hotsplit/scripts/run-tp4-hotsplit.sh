@@ -707,7 +707,13 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
     # name (a hard-coded "mimo-pro" got 404 on any other SERVED_MODEL_NAME and
     # failed the launch). The JSON is built by python3 -- the value is safely
     # encoded, never interpolated into JSON by hand.
-    SMOKE_BODY="$(python3 -c 'import json,os,sys; print(json.dumps({"model": os.environ.get("SERVED_MODEL_NAME","mimo-pro"), "messages":[{"role":"user","content":"Reply exactly TP4_OK"}], "max_tokens":64, "temperature":0}))')"
+    # Review fix (round 25): pass the served-model-name EXPLICITLY -- the
+    # launcher assigns SERVED_MODEL_NAME from _EFF_ENV without export, so an
+    # os.environ lookup in python would fall back to mimo-pro whenever only
+    # KVP_SERVED_MODEL_NAME was set (docker args used my-deployment, the smoke
+    # request did not). Explicit per-command env makes the smoke body agree
+    # with the engine arg in EVERY case.
+    SMOKE_BODY="$(SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}" python3 -c 'import json,os,sys; print(json.dumps({"model": os.environ.get("SERVED_MODEL_NAME","mimo-pro"), "messages":[{"role":"user","content":"Reply exactly TP4_OK"}], "max_tokens":64, "temperature":0}))')"
     SMOKE_JSON="$(curl -fsS --max-time 120 -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
       "http://$URLHOST:$PORT/v1/chat/completions" \
       -d "$SMOKE_BODY" || true)"
