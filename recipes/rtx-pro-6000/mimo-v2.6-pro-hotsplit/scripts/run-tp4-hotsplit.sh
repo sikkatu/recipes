@@ -516,7 +516,11 @@ if kv_dtype == "auto" and model_dir:
 print("KVP_SERVED_MODEL_NAME=%s" % pick("KVP_SERVED_MODEL_NAME", "SERVED_MODEL_NAME", default="mimo-pro"))
 print("KVP_KV_CACHE_DTYPE=%s" % kv_dtype)
 print("KVP_MAX_MODEL_LEN=%s" % pick("KVP_MAX_MODEL_LEN", "MAX_MODEL_LEN", default="1048576"))
-print("KVP_BLOCK_SIZE=%s" % pick("KVP_BLOCK_SIZE", "KV_PERSIST_BLOCK_SIZE", "BLOCK_SIZE", default="16"))
+# Review fix (round 26): bare BLOCK_SIZE deliberately NOT read -- the knob
+# was renamed to KV_PERSIST_BLOCK_SIZE to avoid clashes with unrelated
+# environments (a stray BLOCK_SIZE=64 would desync the gate file from the
+# engine arg).
+print("KVP_BLOCK_SIZE=%s" % pick("KVP_BLOCK_SIZE", "KV_PERSIST_BLOCK_SIZE", default="16"))
 print("KVP_TP_SIZE=%s" % pick("KVP_TP_SIZE", "TP_SIZE", default="4"))
 PYEFF
 )"

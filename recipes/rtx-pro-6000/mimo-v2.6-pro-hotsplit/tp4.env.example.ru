@@ -139,5 +139,13 @@ HOTSPLIT_MAX_TOKENS=8192                 # лимит токенов живог�
 # KV_PERSIST=1
 # KV_PERSIST_HOST=127.0.0.1   # хост lmcache (loopback; см. docs kv-persistence)
 # KV_PERSIST_PORT=5555       # порт lmcache (ZMQ)
+#                            # Должен совпадать с LMCACHE_PORT кэш-сервера в
+#                            # kv-persistence — смена порта только на одной
+#                            # стороне оставит другую устаревшей.
+# Кодек L2-кэша для KV_PERSIST=1. Должен совпадать с кодеком, под которым
+# стартовал кэш-сервер (kv-persistence: USE_LOSSLESS_SERDE / LMCACHE_L2_SERDE) —
+# кодек входит в namespace идентичности кэша: расхождение даёт безопасный miss,
+# но тихо отключает переиспользование. Указывайте ОДНО и то же значение с обеих сторон.
+# USE_LOSSLESS_SERDE=0    # 0/none = сырые чанки; 1/zstd = zstd; lz4 = lz4
 # KV_PERSIST_NAMESPACE=      # переопределить выведенный namespace (для продвинутых; оставьте пустым)
 # KV_PERSIST_BLOCK_SIZE=16   # размер KV-блока, фиксируемый через --block-size при KV_PERSIST=1 (должен совпадать с KVP_BLOCK_SIZE); переименован из BLOCK_SIZE, чтобы не задеть чужое окружение
