@@ -486,6 +486,21 @@ if [ "$KV_PERSIST" = "1" ]; then
   # MAX_MODEL_LEN=524288, TP!=4) verifies clean instead of being blocked by a
   # MISMATCH against the shipped identity.env pins.
   KVP_REPO="${KVP_REPO_ROOT:-$HOME/kv-persistence}"
+  # Review fix (round 34, P2): verify the kv-persistence checkout is a
+  # COMPATIBLE version before relying on its CLI or identity gate. The
+  # pin lives in $KVP_REPO/KVP_COMPAT_VERSION (currently "1"). Bump it
+  # when the identity hash algorithm or CLI interface changes.
+  KVP_COMPAT_EXPECTED="${KVP_COMPAT_VERSION:-1}"
+  KVP_COMPAT_FOUND=""
+  if [ -f "$KVP_REPO/KVP_COMPAT_VERSION" ]; then
+    KVP_COMPAT_FOUND="$(head -1 "$KVP_REPO/KVP_COMPAT_VERSION" | tr -d '[:space:]')"
+  fi
+  if [ "$KVP_COMPAT_FOUND" != "$KVP_COMPAT_EXPECTED" ]; then
+    die "kv-persistence compatibility check FAILED: expected KVP_COMPAT_VERSION=$KVP_COMPAT_EXPECTED, found '${KVP_COMPAT_FOUND:-<missing>}' at $KVP_REPO/KVP_COMPAT_VERSION.
+Different versions may compute identity differently or lack the CLI interface.
+Update the kv-persistence checkout (git pull) or set KVP_COMPAT_VERSION to the expected value."
+  fi
+
   _EFF_ENV=""
   if [ -f "$KVP_REPO/implementation/kvpersist/cli.py" ]; then
     _EFF_ENV="$(PYTHONPATH="$KVP_REPO/implementation${PYTHONPATH:+:$PYTHONPATH}" \
@@ -633,10 +648,29 @@ accept that remote-fetch deployments of the same HF id share cache blocks."
   # Pin the KV block size explicitly: the kv-persistence identity pin
   # (KVP_BLOCK_SIZE) must match a verifiable engine argument.
   MODEL_ARGS+=(--block-size "$KV_PERSIST_BLOCK_SIZE")
-  echo "KV_PERSIST=1: identity-check your deployment BEFORE trusting cached data:"
-  echo "  set -a; . $LIVE_DIR/kvp-effective-identity.env; set +a   # SAME effective engine values as this run"
-  echo "  export KVP_CACHE_ROOT=...   # the kv-persistence cache root (configs/generic/cache.env)"
-  echo "  bash \$KVP_REPO/scripts/verify-engine-identity.sh $CONTAINER   # exit 4/5 = do NOT reuse cache"
+  # Review fix (round 34, P1): the identity gate is MANDATORY, exactly
+  # like run-vllm-with-persist.sh -- cache reuse is BLOCKED on MISMATCH
+  # (exit 4) or INCONCLUSIVE (exit 5). No more manual reminder.
+  if [ -f "$KVP_REPO/scripts/verify-engine-identity.sh" ]; then
+    echo "KV_PERSIST=1: identity gate (mandatory) -- verifying identity config"
+    _gate_rc=0
+    set -a; . "$LIVE_DIR/kvp-effective-identity.env" 2>/dev/null || true; set +a
+    bash "$KVP_REPO/scripts/verify-engine-identity.sh" --check-config-only \
+      || _gate_rc=$?
+    if [ "$_gate_rc" -ne 0 ]; then
+      if [ "$_gate_rc" -eq 5 ]; then
+        die "INCONCLUSIVE: engine identity could not be verified -- cache reuse REFUSED by policy.
+Fix configs/.../identity.env(.local) and rerun."
+      fi
+      die "ENGINE IDENTITY MISMATCH (exit $_gate_rc): cache must NOT be reused.
+Fix configs/.../identity.env(.local) and rerun."
+    fi
+    echo "KV_PERSIST=1: identity gate PASSED -- persistent cache is trusted"
+  else
+    die "KV_PERSIST=1 requires kv-persistence's verify-engine-identity.sh at $KVP_REPO/scripts/.
+Clone https://github.com/sikkatu/kv-persistence (set KVP_REPO_ROOT if non-standard).
+Without the identity gate cache reuse is REFUSED by policy."
+  fi
 fi
 docker run -d --name "$CONTAINER" --restart no \
   --gpus all --ipc host --network host \

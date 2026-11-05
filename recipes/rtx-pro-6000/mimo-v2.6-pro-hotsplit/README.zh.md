@@ -235,14 +235,17 @@ MiMo-V2.6-Pro 在 69 个 MoE 层中的每一层从 384 个专家中路由 8 个�
    克隆 `KVP_REPO_ROOT` 或 `~/kv-persistence`），否则由 KV 兼容性字段的确定性哈希生成
    （config.json、权重索引 + shard 大小、tokenizer 文件、chat template、kv dtype、
    max-model-len、block size、TP size）。因此 `KV_PERSIST=1` **必须设置** `MODEL_DIR`
-   —— 远程拉取无法按版本隔离。**诚实说明**：备用哈希是尽力而为的近似；若需经过验证的
-   门禁保证，请安装 kv-persistence 并在信任缓存数据前运行 `verify-engine-identity.sh`。
+   —— 远程拉取无法按版本隔离。**诚实说明**：备用哈希是尽力而为的近似。
+   **评审修正（round 34）**：`kv-persistence/scripts/verify-engine-identity.sh` 门禁
+   现在**强制且由启动器自动运行** —— MISMATCH（exit 4）或 INCONCLUSIVE（exit 5）时
+   缓存复用被阻止，与 kv-persistence 自带的 `run-vllm-with-persist.sh` 完全一致。
+   启动器还会校验克隆的 `KVP_COMPAT_VERSION` 版本钉住，版本不兼容则拒绝启动。
    若手动设置 `KV_PERSIST_NAMESPACE`，隔离责任由您自行承担。
 2. 追加 `--kv-transfer-config`（LMCache `LMCacheMPConnector`）。
 3. 追加 `--enable-prompt-tokens-details` —— 没有它就不会上报 `cached_tokens`（唯一的
    机器可读复用计数器），kv-persistence 的验收测试（`scripts/test-recovery.sh`）永远无法 PASS。
 4. 固定 `--block-size 16`，使 `kv-persistence/scripts/verify-engine-identity.sh` 有可验证的
-   引擎参数（在信任缓存数据之前对容器运行它 —— 退出码 4/5 表示**不得**复用缓存）。
+   引擎参数。门禁在启动时自动运行（round 34），退出码 4/5 即拒绝缓存。
 
 安装步骤：
 1. 启动缓存服务（见其 wiki）：

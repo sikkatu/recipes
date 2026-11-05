@@ -105,6 +105,13 @@ def _install_stubs(tmp_path: Path):
     kvp = tmp_path / "kv-persistence"
     (kvp / "implementation" / "kvpersist").mkdir(parents=True)
     (kvp / "implementation" / "kvpersist" / "cli.py").write_text("# stub\n")
+    # Review (round 34): the launcher pins a COMPATIBLE kv-persistence
+    # version (KVP_COMPAT_VERSION) and runs the identity gate MANDATORY.
+    (kvp / "KVP_COMPAT_VERSION").write_text("1\n")
+    (kvp / "scripts").mkdir(exist_ok=True)
+    gate = kvp / "scripts" / "verify-engine-identity.sh"
+    gate.write_text('#!/usr/bin/env bash\necho "$0 $*" >> "$STUB_LOG"\nexit "${GATE_RC:-0}"\n')
+    gate.chmod(gate.stat().st_mode | stat.S_IEXEC)
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     # Review fix (round 25): scrub every name the launcher resolves through the
@@ -345,8 +352,8 @@ def test_namespace_matches_engine_args(lp, tmp_path):
 def test_effective_identity_is_persisted(lp, tmp_path):
     """Review fix (round 23): the launcher must save the EFFECTIVE engine
     identity to live/kvp-effective-identity.env through the shared resolver
-    (kvpersist.cli effective-identity), and the manual identity-gate reminder
-    must tell the operator to source that file first -- so the gate compares
+    (kvpersist.cli effective-identity), and the MANDATORY identity gate (round
+    34) sources that file first -- so the gate compares
     the container args against the SAME values the namespace was hashed from.
     A non-default run (KV_CACHE_DTYPE=fp8 / MAX_MODEL_LEN=524288 / TP=2) must
     not be blocked by MISMATCH against the shipped identity.env pins."""
@@ -369,10 +376,18 @@ def test_effective_identity_is_persisted(lp, tmp_path):
     assert "kvp-effective-identity.env" in combined, (
         "the launcher must tell the operator about the persisted effective identity"
     )
-    assert "verify-engine-identity.sh" in combined
-    assert "set -a" in combined and ". " in combined, (
-        "the manual-gate reminder must source the effective identity file first "
-        f"so the gate sees the same values:\n{combined[-1500:]}"
+    # Review round 34: the gate is MANDATORY -- the launcher sources the
+    # effective identity file and runs the gate ITSELF (no manual reminder).
+    assert "identity gate (mandatory)" in combined, (
+        "the launcher must RUN the identity gate, not just mention it:\n"
+        f"{combined[-1500:]}"
+    )
+    assert "identity gate PASSED" in combined, (
+        "the mandatory gate must PASS before the cache is trusted:\n"
+        f"{combined[-1500:]}"
+    )
+    assert "verify-engine-identity.sh" in log.read_text(), (
+        "the gate script must actually be executed (see the stub log)"
     )
 
 
@@ -575,3 +590,92 @@ def test_conflicting_overrides_all_five(lp, tmp_path):
     assert payload["model"] == "my-deployment", (
         f"the smoke request must carry the resolved served-model-name, got {payload['model']!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Round 34 (P1): the identity gate is MANDATORY in the recipe launchers.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("lp", LAUNCHERS)
+def test_identity_gate_mismatch_blocks_cache(lp, tmp_path):
+    """Review round 34, P1: a MISMATCH from the identity gate (exit 4) must
+    BLOCK the launch -- same policy as run-vllm-with-persist.sh. Before this
+    fix the recipe launchers only PRINTED a reminder to run the gate by hand,
+    so vLLM could start with the persistent cache attached and unverified."""
+    env, log, cli_env_log = _install_stubs(tmp_path)
+    r = _run(lp, env, {"API_KEY": "secret", "IMAGE": "x@sha256:" + "a" * 64,
+                       "ALLOW_RUN": "1", "KV_PERSIST": "1", "GATE_RC": "4"})
+    assert r.returncode != 0, (
+        "a gate MISMATCH (exit 4) must abort the launch:\n"
+        f"{r.stdout[-1500:]}\n{r.stderr[-1500:]}"
+    )
+    assert "MISMATCH" in (r.stdout + r.stderr).upper(), (
+        "the launcher must report WHY it refused:\n"
+        f"{r.stdout[-1500:]}\n{r.stderr[-1500:]}"
+    )
+    assert not _server_runs(log), (
+        "the engine must NOT be started when the identity gate fails:\n"
+        + log.read_text()[-1500:] if log.exists() else ""
+    )
+
+
+@pytest.mark.parametrize("lp", LAUNCHERS)
+def test_identity_gate_inconclusive_blocks_cache(lp, tmp_path):
+    """Review round 34, P1: INCONCLUSIVE (exit 5) must also block the launch."""
+    env, log, cli_env_log = _install_stubs(tmp_path)
+    r = _run(lp, env, {"API_KEY": "secret", "IMAGE": "x@sha256:" + "a" * 64,
+                       "ALLOW_RUN": "1", "KV_PERSIST": "1", "GATE_RC": "5"})
+    assert r.returncode != 0, (
+        "INCONCLUSIVE (exit 5) must abort the launch:\n"
+        f"{r.stdout[-1500:]}\n{r.stderr[-1500:]}"
+    )
+    assert "INCONCLUSIVE" in (r.stdout + r.stderr).upper(), (
+        "the launcher must report the INCONCLUSIVE verdict:\n"
+        f"{r.stdout[-1500:]}\n{r.stderr[-1500:]}"
+    )
+    assert not _server_runs(log), "the engine must NOT start on INCONCLUSIVE"
+
+
+@pytest.mark.parametrize("lp", LAUNCHERS)
+def test_missing_identity_gate_blocks_cache(lp, tmp_path):
+    """Review round 34, P1: without the gate script cache reuse must be
+    REFUSED -- no silent fallback to unverified cache."""
+    env, log, cli_env_log = _install_stubs(tmp_path)
+    gate = Path(env["KVP_REPO_ROOT"]) / "scripts" / "verify-engine-identity.sh"
+    gate.unlink()
+    r = _run(lp, env, {"API_KEY": "secret", "IMAGE": "x@sha256:" + "a" * 64,
+                       "ALLOW_RUN": "1", "KV_PERSIST": "1"})
+    assert r.returncode != 0, (
+        "without the identity gate the launch must be refused:\n"
+        f"{r.stdout[-1500:]}\n{r.stderr[-1500:]}"
+    )
+    assert "REFUSED" in (r.stdout + r.stderr).upper(), (
+        "the launcher must say cache reuse is REFUSED without the gate:\n"
+        f"{r.stdout[-1500:]}\n{r.stderr[-1500:]}"
+    )
+    assert not _server_runs(log), "the engine must NOT start without the gate"
+
+
+# ---------------------------------------------------------------------------
+# Round 34 (P2): pinned kv-persistence compatibility version.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("lp", LAUNCHERS)
+def test_incompatible_kvp_version_blocks_launch(lp, tmp_path):
+    """Review round 34, P2: a kv-persistence checkout whose
+    KVP_COMPAT_VERSION does not match the expected pin must be rejected
+    BEFORE anything is launched -- different versions may compute identity
+    differently or lack the CLI interface."""
+    env, log, cli_env_log = _install_stubs(tmp_path)
+    compat = Path(env["KVP_REPO_ROOT"]) / "KVP_COMPAT_VERSION"
+    compat.write_text("2\n")
+    r = _run(lp, env, {"API_KEY": "secret", "IMAGE": "x@sha256:" + "a" * 64,
+                       "ALLOW_RUN": "1", "KV_PERSIST": "1"})
+    assert r.returncode != 0, (
+        "an incompatible kv-persistence version must abort the launch:\n"
+        f"{r.stdout[-1500:]}\n{r.stderr[-1500:]}"
+    )
+    combined = (r.stdout + r.stderr).upper()
+    assert "COMPATIBILITY" in combined or "KVP_COMPAT" in combined, (
+        "the launcher must name the compatibility check:\n"
+        f"{r.stdout[-1500:]}\n{r.stderr[-1500:]}"
+    )
+    assert not _server_runs(log), "the engine must NOT start on version mismatch"
