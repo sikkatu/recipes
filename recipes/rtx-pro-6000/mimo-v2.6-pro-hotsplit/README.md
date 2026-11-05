@@ -186,12 +186,20 @@ benchmarks ran on auto). Set `MAX_NUM_SEQS=1` / an explicit `KV_CACHE_DTYPE` in
    files, chat template, kv dtype, max-model-len, block size, TP size).
    `MODEL_DIR` is therefore **required** for `KV_PERSIST=1` — remote fetch cannot be
    isolated per revision. **Honesty note**: the fallback hash is a best-effort
-   approximation. **Review fix (round 34)**: the `kv-persistence/scripts/
-   verify-engine-identity.sh` gate is now **mandatory and auto-run** by the
-   launcher -- cache reuse is BLOCKED on MISMATCH (exit 4) or INCONCLUSIVE
-   (exit 5), exactly like kv-persistence's own `run-vllm-with-persist.sh`.
-   The launcher also verifies the checkout's `KVP_COMPAT_VERSION` pin and
-   refuses to start with an incompatible kv-persistence version. If you set
+   approximation (and since round 35 it is DEAD CODE -- see below).
+   **Review fix (round 34/35)**: the `kv-persistence/scripts/
+   verify-engine-identity.sh` gate is now **mandatory and auto-run TWICE** by
+   the launcher -- pre-launch (`--check-config-only`, the identity config) and
+   **post-launch against the real container** (the actual `--kv-cache-dtype`,
+   `--block-size`, TP size, the attached LMCacheMPConnector and the RUNNING
+   LMCache server's L2 codec), AFTER server readiness and BEFORE the first
+   smoke request. Cache reuse is BLOCKED on MISMATCH (exit 4) or INCONCLUSIVE
+   (exit 5): the container is stopped and the launch fails -- exactly like
+   kv-persistence's own `run-vllm-with-persist.sh`. The launcher also verifies
+   the checkout's `KVP_COMPAT_VERSION` pin and refuses to start with an
+   incompatible kv-persistence version. **kv-persistence is a REQUIRED
+   dependency for `KV_PERSIST=1`** (the old fallback namespace hash is
+   removed -- with the mandatory gate it was unreachable). If you set
    `KV_PERSIST_NAMESPACE` manually, YOU own the isolation guarantee.
 2. `--kv-transfer-config` (LMCache `LMCacheMPConnector`).
 3. `--enable-prompt-tokens-details` — without it `cached_tokens` (the only

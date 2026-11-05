@@ -236,10 +236,15 @@ MiMo-V2.6-Pro 在 69 个 MoE 层中的每一层从 384 个专家中路由 8 个�
    （config.json、权重索引 + shard 大小、tokenizer 文件、chat template、kv dtype、
    max-model-len、block size、TP size）。因此 `KV_PERSIST=1` **必须设置** `MODEL_DIR`
    —— 远程拉取无法按版本隔离。**诚实说明**：备用哈希是尽力而为的近似。
-   **评审修正（round 34）**：`kv-persistence/scripts/verify-engine-identity.sh` 门禁
-   现在**强制且由启动器自动运行** —— MISMATCH（exit 4）或 INCONCLUSIVE（exit 5）时
-   缓存复用被阻止，与 kv-persistence 自带的 `run-vllm-with-persist.sh` 完全一致。
-   启动器还会校验克隆的 `KVP_COMPAT_VERSION` 版本钉住，版本不兼容则拒绝启动。
+   **评审修正（round 34/35）**：`kv-persistence/scripts/verify-engine-identity.sh`
+   门禁现在**强制且由启动器自动运行两次** —— 启动前（`--check-config-only`，identity
+   配置）和**启动后对真实容器**（实际的 `--kv-cache-dtype`、`--block-size`、TP size、
+   已连接的 LMCacheMPConnector 以及**运行中的** LMCache 服务器的 L2 编解码器），在服务器
+   就绪之后、首个 smoke 请求之前执行。MISMATCH（exit 4）或 INCONCLUSIVE（exit 5）时
+   缓存复用被阻止：容器被停止，启动判定为失败 —— 与 kv-persistence 自带的
+   `run-vllm-with-persist.sh` 完全一致。启动器还会校验克隆的 `KVP_COMPAT_VERSION`
+   版本钉住，版本不兼容则拒绝启动。**kv-persistence 是 `KV_PERSIST=1` 的必需依赖**
+   （旧的备用命名空间哈希已删除——有了强制门禁它不可达）。
    若手动设置 `KV_PERSIST_NAMESPACE`，隔离责任由您自行承担。
 2. 追加 `--kv-transfer-config`（LMCache `LMCacheMPConnector`）。
 3. 追加 `--enable-prompt-tokens-details` —— 没有它就不会上报 `cached_tokens`（唯一的

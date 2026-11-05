@@ -110,7 +110,17 @@ def _install_stubs(tmp_path: Path):
     (kvp / "KVP_COMPAT_VERSION").write_text("1\n")
     (kvp / "scripts").mkdir(exist_ok=True)
     gate = kvp / "scripts" / "verify-engine-identity.sh"
-    gate.write_text('#!/usr/bin/env bash\necho "$0 $*" >> "$STUB_LOG"\nexit "${GATE_RC:-0}"\n')
+    # Review (round 35): the gate runs TWICE -- pre-launch (--check-config-only)
+    # and post-launch against the real container. GATE_PRE_RC / GATE_RC control
+    # the two exit codes independently (GATE_RC alone sets both).
+    gate.write_text(
+        '#!/usr/bin/env bash\n'
+        'echo "$0 $*" >> "$STUB_LOG"\n'
+        'case "$*" in\n'
+        '  *--check-config-only*) exit "${GATE_PRE_RC:-${GATE_RC:-0}}" ;;\n'
+        'esac\n'
+        'exit "${GATE_RC:-0}"\n'
+    )
     gate.chmod(gate.stat().st_mode | stat.S_IEXEC)
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
@@ -679,3 +689,92 @@ def test_incompatible_kvp_version_blocks_launch(lp, tmp_path):
         f"{r.stdout[-1500:]}\n{r.stderr[-1500:]}"
     )
     assert not _server_runs(log), "the engine must NOT start on version mismatch"
+
+
+# ---------------------------------------------------------------------------
+# Round 35 (P1): the FULL identity gate runs POST-LAUNCH, before the smoke
+# request. --check-config-only does NOT verify the real engine args (docker
+# --kv-cache-dtype / --block-size / TP), the attached connector or the RUNNING
+# LMCache server's L2 codec.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("lp", LAUNCHERS)
+def test_pre_pass_post_mismatch_stops_before_smoke(lp, tmp_path):
+    """Review round 35, P1: pre-launch gate PASS + post-launch gate MISMATCH
+    (exit 4) -> the container is STOPPED and the smoke request is NEVER sent."""
+    env, log, cli_env_log = _install_stubs(tmp_path)
+    curl = Path(env["PATH"].split(":")[0]) / "curl"
+    curl.write_text(CURL_LOGGING_STUB)
+    curl.chmod(0o755)
+    r = _run(lp, env, {"API_KEY": "secret", "IMAGE": "x@sha256:" + "a" * 64,
+                       "ALLOW_RUN": "1", "KV_PERSIST": "1",
+                       "GATE_PRE_RC": "0", "GATE_RC": "4"})
+    combined = r.stdout + r.stderr
+    assert r.returncode != 0, (
+        f"post-launch MISMATCH must fail the launch:\n{combined[-1500:]}"
+    )
+    assert "identity gate (post-launch)" in combined, (
+        "the post-launch gate must RUN:\n" + combined[-1500:]
+    )
+    assert "MISMATCH" in combined.upper(), (
+        "the MISMATCH verdict must be reported:\n" + combined[-1500:]
+    )
+    stublog = log.read_text() if log.exists() else ""
+    assert "docker rm -f" in stublog, (
+        "the container must be STOPPED on post-launch MISMATCH:\n" + stublog[-1500:]
+    )
+    assert "curl -d " not in stublog, (
+        "the smoke request must NOT be sent when the post-launch gate fails:\n"
+        + stublog[-1500:]
+    )
+
+
+@pytest.mark.parametrize("lp", LAUNCHERS)
+def test_pre_pass_post_inconclusive_stops_before_smoke(lp, tmp_path):
+    """Review round 35, P1: pre-launch PASS + post-launch INCONCLUSIVE (exit 5)
+    -> the container is stopped and the launch fails."""
+    env, log, cli_env_log = _install_stubs(tmp_path)
+    curl = Path(env["PATH"].split(":")[0]) / "curl"
+    curl.write_text(CURL_LOGGING_STUB)
+    curl.chmod(0o755)
+    r = _run(lp, env, {"API_KEY": "secret", "IMAGE": "x@sha256:" + "a" * 64,
+                       "ALLOW_RUN": "1", "KV_PERSIST": "1",
+                       "GATE_PRE_RC": "0", "GATE_RC": "5"})
+    combined = r.stdout + r.stderr
+    assert r.returncode != 0, (
+        f"post-launch INCONCLUSIVE must fail the launch:\n{combined[-1500:]}"
+    )
+    assert "INCONCLUSIVE" in combined.upper(), (
+        "the INCONCLUSIVE verdict must be reported:\n" + combined[-1500:]
+    )
+    stublog = log.read_text() if log.exists() else ""
+    assert "docker rm -f" in stublog, "the container must be stopped"
+    assert "curl -d " not in stublog, (
+        "the smoke request must NOT be sent:\n" + stublog[-1500:]
+    )
+
+
+@pytest.mark.parametrize("lp", LAUNCHERS)
+def test_pre_pass_post_pass_sends_smoke(lp, tmp_path):
+    """Review round 35, P1: pre PASS + post PASS -> the smoke request IS sent
+    and the launch succeeds (the happy path must still work)."""
+    env, log, cli_env_log = _install_stubs(tmp_path)
+    curl = Path(env["PATH"].split(":")[0]) / "curl"
+    curl.write_text(CURL_LOGGING_STUB)
+    curl.chmod(0o755)
+    r = _run(lp, env, {"API_KEY": "secret", "IMAGE": "x@sha256:" + "a" * 64,
+                       "ALLOW_RUN": "1", "KV_PERSIST": "1",
+                       "GATE_PRE_RC": "0", "GATE_RC": "0"})
+    combined = r.stdout + r.stderr
+    assert r.returncode == 0, (
+        f"the happy path must succeed, got {r.returncode}:\n{combined[-1500:]}"
+    )
+    stublog = log.read_text() if log.exists() else ""
+    assert "identity gate (post-launch)" in combined, (
+        "the post-launch gate must run on the happy path too:\n" + combined[-1500:]
+    )
+    assert "identity verified" in combined or "cache attached and trusted" in combined, (
+        "the verified verdict must be reported:\n" + combined[-1500:]
+    )
+    assert "curl -d " in stublog, (
+        "the smoke request MUST be sent when both gates pass:\n" + stublog[-1500:]
+    )

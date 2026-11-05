@@ -306,10 +306,12 @@ fi
 #      an `auto` launch hashes the same as a `bfloat16` launch of that model
 #      (review fix: `KV_CACHE_DTYPE=fp8` used to hash as the shipped bf16 pin --
 #      a wrong-hit risk, not a safe miss);
-#   2. fall back to a deterministic hash of the fields that actually change
-#      KV compatibility (weights files, config.json, tokenizer files, chat
-#      template, kv-cache dtype, max-model-len, block size, TP size) when
-#      kv-persistence is not installed.
+#   2. (review round 35) kv-persistence is now a REQUIRED dependency for
+#      KV_PERSIST=1: the checkout must carry KVP_COMPAT_VERSION and the
+#      identity gate (verify-engine-identity.sh) runs MANDATORY, pre-launch
+#      (--check-config-only) AND post-launch against the real container.
+#      The old deterministic fallback namespace hash is REMOVED -- since the
+#      mandatory gate it was unreachable dead code.
 # The result is a path like /models/<namespace>; the engine then reports that
 # path as model_config.model and incompatible deployments can never read each
 # other's KV blocks (a safe cache miss -- the namespace covers every
@@ -438,38 +440,11 @@ first), or set KV_PERSIST_NAMESPACE explicitly. Refusing to guess: a wrong
 namespace could put new KV under an old identity."
       fi
     fi
-    if [ -z "$KV_PERSIST_NAMESPACE" ] && [ -n "$MODEL_DIR" ]; then
-      # Deterministic fallback: hash everything that changes KV compatibility.
-      KV_PERSIST_NAMESPACE="kvp-$(python3 - "$MODEL_DIR" "$KV_EFFECTIVE_DTYPE" "$MAX_MODEL_LEN" "$KV_PERSIST_BLOCK_SIZE" "${TP_SIZE:-4}" <<'PYEOF'
-import hashlib, json, os, sys
-model_dir, kv_dtype, max_len, block_size, tp_size = sys.argv[1:6]
-h = hashlib.sha256()
-for name in ("config.json",) + tuple(sorted(
-        f for f in os.listdir(model_dir) if f.endswith(".index.json"))):
-    p = os.path.join(model_dir, name)
-    if os.path.isfile(p):
-        h.update(open(p, "rb").read())
-for f in sorted(f for f in os.listdir(model_dir)
-                if f.endswith((".safetensors", ".bin", ".pt", ".gguf"))):
-    p = os.path.join(model_dir, f)
-    h.update(f.encode())
-    h.update(str(os.path.getsize(p)).encode())
-# Review fix: tokenizer files and the chat template also change KV values
-# (token ids -> chunk hashes), and TP size changes the per-rank KV layout.
-for name in ("tokenizer.json", "tokenizer_config.json", "tokenizer.model",
-             "special_tokens_map.json", "chat_template.jinja", "chat_template"):
-    p = os.path.join(model_dir, name)
-    if os.path.isfile(p):
-        h.update(name.encode())
-        h.update(open(p, "rb").read())
-h.update(("|kv=%s|maxlen=%s|blk=%s|tp=%s" % (kv_dtype, max_len, block_size, tp_size)).encode())
-print(h.hexdigest()[:16])
-PYEOF
-)"
-      echo "KV_PERSIST=1: kv-persistence not found at $KVP_REPO -- using the fallback namespace hash." >&2
-      echo "              The fallback covers weights+tokenizer+template+engine args but NOT the full identity gate;" >&2
-      echo "              install kv-persistence (git clone https://github.com/sikkatu/kv-persistence) for the verified one." >&2
-    fi
+    # Review fix (round 35, P4): the fallback namespace hash is REMOVED.
+    # Since round 34 a missing/incompatible kv-persistence checkout aborts the
+    # launch earlier (KVP_COMPAT_VERSION check + mandatory identity gate), so
+    # the fallback was unreachable dead code. kv-persistence is now a REQUIRED
+    # dependency for KV_PERSIST=1.
     [ -n "$KV_PERSIST_NAMESPACE" ] || die "KV_PERSIST=1 requires MODEL_DIR (local checkpoint) to derive the cache-identity namespace.
 Remote fetch (MODEL_DIR unset) cannot be namespace-isolated: the engine reports the
 HF id as model_config.model, so two revisions of one HF id would share one L2
@@ -600,6 +575,32 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
     # KVP_SERVED_MODEL_NAME was set (docker args used my-deployment, the smoke
     # request did not). Explicit per-command env makes the smoke body agree
     # with the engine arg in EVERY case.
+    # Review fix (round 35, P1): the FULL identity gate now runs AFTER the
+    # server is ready and BEFORE the first smoke request -- exactly like
+    # run-vllm-with-persist.sh post-launch. --check-config-only (run before
+    # docker run) does NOT verify the real engine: the container's actual
+    # --kv-cache-dtype / --block-size / TP size, the attached LMCacheMPConnector
+    # and the RUNNING LMCache server's L2 codec. MISMATCH (4) or INCONCLUSIVE
+    # (5) here STOPS the container and fails the launch -- unverified cache is
+    # never trusted.
+    if [ "$KV_PERSIST" = "1" ]; then
+      echo "KV_PERSIST=1: identity gate (post-launch) -- verifying real engine args + server codec"
+      _pgate_rc=0
+      bash "$KVP_REPO/scripts/verify-engine-identity.sh" "$CONTAINER" \
+        || _pgate_rc=$?
+      if [ "$_pgate_rc" -ne 0 ]; then
+        docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+        if [ "$_pgate_rc" -eq 5 ]; then
+          echo "ERROR: INCONCLUSIVE -- engine identity could not be verified (see output above)." >&2
+          echo "Cache reuse is REFUSED by policy. Fix configs/.../identity.env(.local) and rerun." >&2
+          exit 1
+        fi
+        echo "ERROR: ENGINE IDENTITY MISMATCH (exit $_pgate_rc) -- cache must NOT be reused." >&2
+        echo "Fix configs/.../identity.env(.local) and rerun." >&2
+        exit 1
+      fi
+      echo "KV_PERSIST=1: identity verified -- persistent cache attached and trusted"
+    fi
     SMOKE_BODY="$(SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}" python3 -c 'import json,os,sys; print(json.dumps({"model": os.environ.get("SERVED_MODEL_NAME","mimo-pro"), "messages":[{"role":"user","content":"Reply exactly TP4_OK"}], "max_tokens":64, "temperature":0}))')"
     SMOKE_JSON="$(curl -fsS --max-time 120 -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
       "http://$URLHOST:$PORT/v1/chat/completions" \

@@ -276,12 +276,21 @@ MiMo-V2.6-Pro маршрутизирует 8 из 384 экспертов в ка
    шардов, tokenizer-файлы, chat template, kv-dtype, max-model-len, block size, TP size).
    Поэтому для `KV_PERSIST=1` **обязателен** `MODEL_DIR` — удалённую загрузку нельзя
    изолировать по ревизиям. **Честная оговорка**: запасной хэш — приближение по лучшему
-   варианту. **Правка ревью (raund 34)**: гейт `kv-persistence/scripts/
-   verify-engine-identity.sh` теперь **обязателен и запускается автоматически**
-   лаунчером — подключение кэша блокируется при MISMATCH (exit 4) или INCONCLUSIVE
-   (exit 5), в точности как в собственном `run-vllm-with-persist.sh` kv-persistence.
-   Лаунчер также проверяет пин `KVP_COMPAT_VERSION` клона и отказывается стартовать
-   с несовместимой версией kv-persistence. Если вы задали `KV_PERSIST_NAMESPACE`
+   варианту (и с raund 35 это МЁРТВЫЙ КОД — см. ниже).
+   **Правка ревью (raund 34/35)**: гейт `kv-persistence/scripts/
+   verify-engine-identity.sh` теперь **обязателен и запускается автоматически
+   ДВАЖДЫ** лаунчером — до запуска (`--check-config-only`, конфиг identity) и
+   **после запуска по реальному контейнеру** (фактические `--kv-cache-dtype`,
+   `--block-size`, TP size, подключённый LMCacheMPConnector и L2-кодек
+   РАБОТАЮЩЕГО LMCache-сервера), после готовности сервера и ДО первого
+   smoke-запроса. Подключение кэша блокируется при MISMATCH (exit 4) или
+   INCONCLUSIVE (exit 5): контейнер останавливается, запуск считается
+   неуспешным — в точности как в собственном `run-vllm-with-persist.sh`
+   kv-persistence. Лаунчер также проверяет пин `KVP_COMPAT_VERSION` клона и
+   отказывается стартовать с несовместимой версией kv-persistence.
+   **kv-persistence — ОБЯЗАТЕЛЬНАЯ зависимость для `KV_PERSIST=1`**
+   (старый запасной хэш namespace удалён — с обязательным гейтом он был
+   недостижим). Если вы задали `KV_PERSIST_NAMESPACE`
    вручную, ответственность за изоляцию — на вас.
 2. `--kv-transfer-config` (коннектор LMCache `LMCacheMPConnector`).
 3. `--enable-prompt-tokens-details` — без него `cached_tokens` (единственный
