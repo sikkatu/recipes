@@ -47,9 +47,21 @@ ALLOW_NO_AUTH="${ALLOW_NO_AUTH:-0}"
 # On any OTHER bind an explicit key is MANDATORY and never auto-generated (fail-safe: a
 # server on a routable address is always authenticated). ALLOW_NO_AUTH=1 is accepted ONLY
 # together with a proven loopback bind (127.0.0.1 or ::1).
+# Round 56 (user): lossless compression ON by default -- no exports needed.
+# The kv-persistence cache (LMCACHE_L2_SERDE) folds this; opt out:
+#   LMCACHE_L2_SERDE=none  (byte-exact raw) / =lz4 (faster, larger)
+LMCACHE_L2_SERDE="${LMCACHE_L2_SERDE:-zstd}"
 LIVE_DIR="${LIVE_DIR:-$PWD/live}"
-KEY_FILE="$LIVE_DIR/api_key"
-mkdir -p "$LIVE_DIR"
+# Round 56 (user): ONE API key for BOTH repos -- canonical file
+# $HOME/.config/kvp/api_key (shared with kv-persistence and the hotsplit
+# launcher). A legacy per-repo live/api_key is migrated here.
+KEY_FILE="${KVP_API_KEY_FILE:-$HOME/.config/kvp/api_key}"
+mkdir -p "$LIVE_DIR" "$(dirname "$KEY_FILE")"
+if [ ! -f "$KEY_FILE" ] && [ -f "$LIVE_DIR/api_key" ]; then
+  cp "$LIVE_DIR/api_key" "$KEY_FILE"
+  chmod 600 "$KEY_FILE"
+  echo "API key migrated to the shared location: $KEY_FILE"
+fi
 if [ -z "$API_KEY" ] && [ -f "$KEY_FILE" ]; then
   API_KEY="$(head -n1 "$KEY_FILE" | tr -d '[:space:]')"
 fi
@@ -91,6 +103,8 @@ if [ -z "$API_KEY" ]; then
     umask 077
     printf '%s\n' "$API_KEY" > "$KEY_FILE"
     chmod 600 "$KEY_FILE"
+    printf '%s\n' "$API_KEY" > "$LIVE_DIR/api_key"
+    chmod 600 "$LIVE_DIR/api_key"
     echo "API key auto-generated for the loopback server and saved to $KEY_FILE"
     echo "(not printed here; check-tp4-api.sh and manage.sh read it automatically)."
   fi
