@@ -58,6 +58,22 @@ recipes/<hardware>/<recipe>/
 6. Rollback is a script.
 7. No credentials in the tree.
 
+## Integration with kv-persistence
+
+The kv-persistence project (https://github.com/sikkatu/kv-persistence) adds a
+persistent KV cache on top of these recipes. The two repos are designed to
+run together with **zero manual configuration**:
+
+* **ONE command** -- `bash scripts/start-all.sh` in kv-persistence starts
+  observability + cache + the vLLM engine (with the recipe's dynamic
+  hot/cold experts by default). `bash scripts/stop-all.sh` stops everything
+  (data kept).
+* **ONE API key** -- both repos share `$HOME/.config/kvp/api_key`
+  (auto-generated on first launch, chmod 600; override: `KVP_API_KEY_FILE=`).
+  A legacy per-repo `live/api_key` is migrated automatically.
+* **No exports** -- IMAGE, MODEL_DIR, the lmcache venv and the cache device
+  all resolve automatically.
+
 ## Attribution
 
 These recipes are the product of substantial hands-on work on real hardware. If you use this repository — its recipes, measurements, write-ups or documentation — in your own work, please **consider referencing it**: linking `https://github.com/sikkatu/recipes` (and the specific recipe page) where you publish derived results helps others find the source. This is a request on top of the Apache-2.0 NOTICE obligation: distributors must reproduce the NOTICE (see NOTICE), everyone else is asked to link. Issues and corrections are welcome.

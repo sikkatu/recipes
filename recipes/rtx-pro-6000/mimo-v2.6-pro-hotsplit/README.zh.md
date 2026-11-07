@@ -161,7 +161,10 @@ bash scripts/run-tp4-hotsplit.sh
 ### 5. API 请求（质量对比）
 
 ```bash
-KEY="$(cat live/api_key)"
+KEY="$(cat ~/.config/kvp/api_key)"
+
+API 密钥与 kv-persistence 共用：`$HOME/.config/kvp/api_key`（第 56 轮）。
+旧版 `live/api_key` 自动迁移。
 URL="http://127.0.0.1:30007/v1/chat/completions"
 curl -s "$URL" -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
   -d '{"model":"mimo-pro","messages":[{"role":"user","content":"What is the capital of France? Answer in one sentence."}],"max_tokens":100,"temperature":0}'

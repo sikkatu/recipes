@@ -123,7 +123,10 @@ bash scripts/run-tp4-hotsplit.sh
 ### 5. Raw API queries (quality comparison)
 
 ```bash
-KEY="$(cat live/api_key)"
+KEY="$(cat ~/.config/kvp/api_key)"
+
+The API key is shared with kv-persistence in `$HOME/.config/kvp/api_key`
+(round 56). A legacy `live/api_key` is migrated automatically.
 URL="http://127.0.0.1:30007/v1/chat/completions"
 curl -s "$URL" -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
   -d '{"model":"mimo-pro","messages":[{"role":"user","content":"What is the capital of France? Answer in one sentence."}],"max_tokens":100,"temperature":0}'

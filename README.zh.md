@@ -56,6 +56,19 @@ recipes/<hardware>/<recipe>/
 6. 回退是一个脚本。
 7. 仓库中没有任何凭据。
 
+## 与 kv-persistence 集成
+
+kv-persistence 项目（https://github.com/sikkatu/kv-persistence）在这些配方
+之上提供持久化 KV 缓存。两个仓库可**零配置**协同运行：
+
+* **一条命令** -- 在 kv-persistence 中 `bash scripts/start-all.sh` 启动
+  监控 + 缓存 + vLLM 引擎（默认启用配方的动态热/冷专家）。
+  `bash scripts/stop-all.sh` 停止全部（数据保留）。
+* **一个 API 密钥** -- 两个仓库共用 `$HOME/.config/kvp/api_key`
+  （首次启动自动生成，chmod 600；覆盖：`KVP_API_KEY_FILE=`）。
+  旧版 `live/api_key` 自动迁移。
+* **无需 export** -- IMAGE、MODEL_DIR、lmcache venv 和缓存设备全部自动解析。
+
 ## 署名
 
 这些配方是大量真实硬件实操的成果。如果你在自己的工作中使用本仓库 —— 配方、测量、分析或文档 —— **请考虑注明出处**：在发布基于本仓库的结果时附上 `https://github.com/sikkatu/recipes`（以及具体配方页面）链接，有助于他人找到来源。这是 Apache-2.0 NOTICE 义务之上的请求：分发者必须复制 NOTICE（见 NOTICE），其余人请注明出处。欢迎提出问题和修正。
