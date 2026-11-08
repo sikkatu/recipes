@@ -19,6 +19,16 @@
 # (copy tp4.env.example and edit). Values already in the environment win.
 set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
+# Round 65: send the API key on a stdin pipe (printf is a builtin -- the key is
+# never visible in `ps` and no key file is needed). Without a key the request
+# goes out unauthenticated (the documented ALLOW_NO_AUTH loopback mode).
+kvp_curl(){
+  if [ -n "${API_KEY:-}" ]; then
+    printf 'header = "Authorization: Bearer %s"\n' "$API_KEY" | curl -K - "$@"
+  else
+    curl "$@"
+  fi
+}
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 
@@ -86,11 +96,9 @@ case "$cmd" in
     echo "== API ($BASE) =="
     # send the key when we have one; without a key the request is only valid for
     # ALLOW_NO_AUTH loopback servers (a protected API answers 401/403 without it)
-    CURL_AUTH=()
-    if [ -n "${API_KEY:-}" ]; then
-      CURL_AUTH=(-H "Authorization: Bearer $API_KEY")
-    fi
-    code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "${CURL_AUTH[@]}" "$BASE/v1/models" 2>/dev/null)"
+    # Round 65: kvp_curl sends the key on a pipe (no file, no ps exposure);
+    # plain curl when no key is set (the ALLOW_NO_AUTH loopback mode).
+    code="$(kvp_curl -s -m 5 -o /dev/null -w '%{http_code}' "$BASE/v1/models" 2>/dev/null)" || true   # set -e: curl exit != 0 must not kill status
     case "$code" in 000|"") code=000 ;; esac
     case "$code" in
       200) echo "  reachable (authenticated)" ;;
@@ -215,7 +223,7 @@ case "$cmd" in
         bash "$HERE/check-tp4-api.sh"
       else
         echo "      check-tp4-api.sh also missing; basic curl check:"
-        curl -s -m 5 -H "Authorization: Bearer ${API_KEY:-}" "${BASE:-http://127.0.0.1:30007}/v1/models" || true
+        kvp_curl -s -m 5 "${BASE:-http://127.0.0.1:30007}/v1/models" || true
       fi
     fi
     ;;

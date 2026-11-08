@@ -3,6 +3,16 @@
 # requests are only valid for an ALLOW_NO_AUTH loopback server (a protected API answers 401).
 # usage: check-tp4-api.sh [base-url]   (default http://127.0.0.1:30007)
 set -Eeuo pipefail
+# Round 65: send the API key on a stdin pipe (printf is a builtin -- the key is
+# never visible in `ps` and no key file is needed). Without a key the request
+# goes out unauthenticated (the documented ALLOW_NO_AUTH loopback mode).
+kvp_curl(){
+  if [ -n "${API_KEY:-}" ]; then
+    printf 'header = "Authorization: Bearer %s"\n' "$API_KEY" | curl -K - "$@"
+  else
+    curl "$@"
+  fi
+}
 BASE="${1:-${BASE:-http://127.0.0.1:30007}}"
 # the launcher persists its auto-generated key in live/api_key -- use it when the shell has none
 if [ -z "${API_KEY:-}" ]; then
@@ -17,18 +27,18 @@ if [ -z "${API_KEY:-}" ]; then
 fi
 AUTH=()
 if [ -n "${API_KEY:-}" ]; then
-  AUTH=(-H "Authorization: Bearer $API_KEY")
+  AUTH=()   # round 65: kvp_curl sends the key on a pipe -- nothing to pass here
 else
   echo "NOTE: no API key found (shell, tp4.env or live/api_key). If the server requires" >&2
   echo "      auth (the default), these requests will get 401/403." >&2
   echo "      on loopback only." >&2
 fi
 echo "== /v1/models =="
-curl -fsS "${AUTH[@]}" "$BASE/v1/models"; echo
+kvp_curl -fsS "$BASE/v1/models"; echo
 echo "== /v1/chat/completions =="
 # Review fix (round 22): the model name must follow SERVED_MODEL_NAME -- a
 # hardcoded "mimo-pro" gets 404 as soon as the launcher serves another name.
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}"
-curl -fsS "${AUTH[@]}" "$BASE/v1/chat/completions" -H 'Content-Type: application/json' \
+kvp_curl -fsS "$BASE/v1/chat/completions" -H 'Content-Type: application/json' \
   -d "{\"model\":\"$SERVED_MODEL_NAME\",\"messages\":[{\"role\":\"user\",\"content\":\"Say TP4_OK\"}],\"max_tokens\":64,\"temperature\":0}"
 echo

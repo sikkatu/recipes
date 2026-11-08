@@ -3,6 +3,16 @@
 # VERIFIED on target hardware (2026-10-22): weights load, API answers, generation coherent. Read ../README.md first.
 set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
+# Round 65: send the API key on a stdin pipe (printf is a builtin -- the key is
+# never visible in `ps` and no key file is needed). Without a key the request
+# goes out unauthenticated (the documented ALLOW_NO_AUTH loopback mode).
+kvp_curl(){
+  if [ -n "${API_KEY:-}" ]; then
+    printf 'header = "Authorization: Bearer %s"\n' "$API_KEY" | curl -K - "$@"
+  else
+    curl "$@"
+  fi
+}
 # --- seed settings from ./tp4.env (optional) ------------------------------------------------------
 # Same contract as manage.sh: values already in the environment WIN over the file -- the file
 # is applied only for names that are not already exported ("only fill values not already
@@ -50,11 +60,18 @@ ALLOW_NO_AUTH="${ALLOW_NO_AUTH:-0}"
 # Round 56 (user): lossless compression ON by default -- no exports needed.
 # The kv-persistence cache (LMCACHE_L2_SERDE) folds this; opt out:
 #   LMCACHE_L2_SERDE=none  (byte-exact raw) / =lz4 (faster, larger)
-LMCACHE_L2_SERDE="${LMCACHE_L2_SERDE:-zstd}"
-# Round 63 (review): the default was computed but never used -- export it so
-# the value actually reaches the container env and the kv-persistence
-# identity gate (both read LMCACHE_L2_SERDE).
-export LMCACHE_L2_SERDE
+# Round 64 (review): export the default codec ONLY when none of the documented
+# opt-out switches is set. With the unconditional export (round 63), a
+# USE_LOSSLESS_SERDE=0 or KVP_L2_SERDE=none in tp4.env was overridden by the
+# exported zstd default. Precedence: explicit env switch > pin > default.
+if [ -z "${LMCACHE_L2_SERDE:-}" ] && [ -z "${KVP_L2_SERDE:-}" ] && [ -z "${USE_LOSSLESS_SERDE:-}" ]; then
+  LMCACHE_L2_SERDE=zstd
+fi
+# Export the effective codec so the container env and the kv-persistence
+# identity gate read the SAME value (both read LMCACHE_L2_SERDE). When the
+# user pinned a different codec (KVP_L2_SERDE / USE_LOSSLESS_SERDE) the fold
+# in kv-persistence resolves it; here we only pass the raw configured value.
+export LMCACHE_L2_SERDE="${LMCACHE_L2_SERDE:-}"
 LIVE_DIR="${LIVE_DIR:-$PWD/live}"
 # Round 56 (user): ONE API key for BOTH repos -- canonical file
 # $HOME/.config/kvp/api_key (shared with kv-persistence and the hotsplit
@@ -119,8 +136,6 @@ if [ -n "$API_KEY" ]; then
   umask 077
   printf 'VLLM_API_KEY=%s\n' "$API_KEY" > "$LIVE_DIR/.engine-env"
   chmod 600 "$LIVE_DIR/.engine-env"
-  printf 'header = "Authorization: Bearer %s"\n' "$API_KEY" > "$LIVE_DIR/.curl-header"
-  chmod 600 "$LIVE_DIR/.curl-header"
 fi
 if [ -n "$API_KEY" ] && [ ! -f "$KEY_FILE" ]; then
   umask 077
@@ -605,7 +620,7 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
   else
     printf '[%3ds] container=%s  %d new log line(s)\n' "$ELAPSED" "${RUN_STATE%% *}" "$NEW_COUNT"
   fi
-  if curl -fsS --max-time 3 -H "Authorization: Bearer $API_KEY" "http://$URLHOST:$PORT/v1/models" > "$MODELS_JSON" 2>/dev/null; then
+  if kvp_curl -fsS --max-time 3 "http://$URLHOST:$PORT/v1/models" > "$MODELS_JSON" 2>/dev/null; then
     cat "$MODELS_JSON"; echo
     # Review fix (round 24): the smoke request must use the ACTUAL served model
     # name (a hard-coded "mimo-pro" got 404 on any other SERVED_MODEL_NAME and
@@ -644,7 +659,7 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
       echo "KV_PERSIST=1: identity verified -- persistent cache attached and trusted"
     fi
     SMOKE_BODY="$(SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}" python3 -c 'import json,os,sys; print(json.dumps({"model": os.environ.get("SERVED_MODEL_NAME","mimo-pro"), "messages":[{"role":"user","content":"Reply exactly TP4_OK"}], "max_tokens":64, "temperature":0}))')"
-    SMOKE_JSON="$(curl -fsS --max-time 120 -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+    SMOKE_JSON="$(kvp_curl -fsS --max-time 120 -H 'Content-Type: application/json' \
       "http://$URLHOST:$PORT/v1/chat/completions" \
       -d "$SMOKE_BODY" || true)"
     echo "$SMOKE_JSON"

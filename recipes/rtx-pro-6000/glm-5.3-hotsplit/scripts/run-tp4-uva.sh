@@ -3,6 +3,16 @@
 # AUTHORED, NOT RUN ON TARGET HARDWARE. Read ../README.md first.
 set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
+# Round 65: send the API key on a stdin pipe (printf is a builtin -- the key is
+# never visible in `ps` and no key file is needed). Without a key the request
+# goes out unauthenticated (the documented ALLOW_NO_AUTH loopback mode).
+kvp_curl(){
+  if [ -n "${API_KEY:-}" ]; then
+    printf 'header = "Authorization: Bearer %s"\n' "$API_KEY" | curl -K - "$@"
+  else
+    curl "$@"
+  fi
+}
 
 # --- security contract (SECURITY.md): no wide bind, no disabled auth -----------------------------
 # BIND is where the SERVER listens (host networking: -p would be a no-op, so the bind is the
@@ -81,8 +91,6 @@ if [ -n "$API_KEY" ]; then
   umask 077
   printf 'VLLM_API_KEY=%s\n' "$API_KEY" > "$LIVE_DIR/.engine-env"
   chmod 600 "$LIVE_DIR/.engine-env"
-  printf 'header = "Authorization: Bearer %s"\n' "$API_KEY" > "$LIVE_DIR/.curl-header"
-  chmod 600 "$LIVE_DIR/.curl-header"
 fi
 if [ -n "$API_KEY" ] && [ ! -f "$KEY_FILE" ]; then
   umask 077
@@ -237,9 +245,9 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
   ELAPSED=$(( $(date +%s) - START_TS ))
   LASTLOG="$(docker logs --tail 400 "$CONTAINER" 2>&1 | grep -E 'Loading|loaded|weights|safetensors|offload|Ready|Starting|server|UVA|memory' | tail -1 | cut -c1-110 || true)"
   printf '[%3ds] container=%s  %s\n' "$ELAPSED" "${RUN_STATE%% *}" "${LASTLOG:-starting...}"
-  if curl -fsS --max-time 3 -H "Authorization: Bearer $API_KEY" "http://$URLHOST:$PORT/v1/models" > "$MODELS_JSON" 2>/dev/null; then
+  if kvp_curl -fsS --max-time 3 "http://$URLHOST:$PORT/v1/models" > "$MODELS_JSON" 2>/dev/null; then
     cat "$MODELS_JSON"; echo
-    SMOKE_JSON="$(curl -fsS --max-time 120 -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+    SMOKE_JSON="$(kvp_curl -fsS --max-time 120 -H 'Content-Type: application/json' \
       "http://$URLHOST:$PORT/v1/chat/completions" \
       -d '{"model":"glm53","messages":[{"role":"user","content":"Reply exactly TP4_OK"}],"max_tokens":64,"temperature":0}' || true)"
     echo "$SMOKE_JSON"

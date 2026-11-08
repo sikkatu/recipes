@@ -515,7 +515,7 @@ def test_manage_status_sends_auth_header():
     """status must send Authorization: Bearer when API_KEY is set (item 6)."""
     for p in sorted(BASE.glob("*/scripts/manage.sh")):
         t = p.read_text()
-        assert "Authorization: Bearer" in t, f"{p}: status must send the API key"
+        assert "kvp_curl" in t, f"{p}: status must authenticate via kvp_curl (round 65: key on a pipe, not in ps)"
         assert "401" in t and "403" in t, f"{p}: status must explain auth rejections"
 
 
@@ -636,7 +636,7 @@ def test_check_api_sends_auth():
     """check-tp4-api.sh must send Authorization: Bearer when API_KEY is set."""
     p = BASE / "mimo-v2.6-pro-hotsplit" / "scripts" / "check-tp4-api.sh"
     t = p.read_text()
-    assert "Authorization: Bearer" in t, "check-tp4-api.sh must authenticate"
+    assert "kvp_curl" in t, "check-tp4-api.sh must authenticate via kvp_curl (round 65)"
     assert "ALLOW_NO_AUTH" in t, "the no-key case must be explained"
 
 

@@ -48,8 +48,10 @@ def test_codec_semantics_agree():
     # recipe launchers default to zstd too
     for ln in ("run-tp4-hotsplit.sh", "run-tp4-uva.sh"):
         t = _read(RECIPE / "scripts" / ln)
-        assert 'LMCACHE_L2_SERDE="${LMCACHE_L2_SERDE:-zstd}"' in t, \
+        assert 'LMCACHE_L2_SERDE=zstd' in t, \
             f"{ln} must default to lossless zstd like kv-persistence"
+        assert 'USE_LOSSLESS_SERDE:-}' in t, \
+            f"{ln}: the codec default must yield to the documented opt-out switches"
 
 def test_lmcache_version_pin_agrees():
     import pytest
