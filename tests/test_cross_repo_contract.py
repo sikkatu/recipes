@@ -90,3 +90,31 @@ def test_hotsplit_files_mounted_by_kv_launcher_exist():
     for name in sorted(set(needed)):
         assert (RECIPE / "patches" / name).is_file(), \
             f"kv launcher mounts patches/{name} but the recipe has no such file"
+
+def test_hotsplit_module_shared():
+    """Round 59 (P1-1): the HotSplit docker config lives in ONE module
+    (scripts/hotsplit_env.sh) that BOTH launchers source. No hand-maintained
+    duplicate lists that can drift."""
+    import pytest
+    mod = RECIPE / "scripts" / "hotsplit_env.sh"
+    assert mod.is_file(), "the shared hotsplit env module must exist"
+    txt = _read(mod)
+    for var in ("HOTSPLIT_NUMA_MAP", "HOTSPLIT_LIVE_COUNTS", "HOTSPLIT_LIVE_SECS",
+                "HOTSPLIT_DYN_STEPS", "HOTSPLIT_DYN_MAX_SWAPS", "HOTSPLIT_DYN_MARGIN",
+                "HOTSPLIT_DYN_DECAY", "HOTSPLIT_DYN_PRIOR_TOKENS", "HOTSPLIT_MAX_TOKENS"):
+        assert var in txt, f"the shared module must handle {var}"
+    assert "IPC_LOCK" in txt and "SYS_NICE" in txt, "caps must be in the shared module"
+    assert "FULL_DECODE_ONLY" in txt, "compilation config must be in the shared module"
+    # Both launchers source the module
+    for launcher in (RECIPE / "scripts" / "run-tp4-hotsplit.sh",):
+        t = _read(launcher)
+        assert "hotsplit_env.sh" in t, f"{launcher.name} must source the shared module"
+    if not KV_REPO.is_dir():
+        pytest.skip(SKIP_REASON)
+    kv = _read(KV_REPO / "scripts" / "run-vllm-with-persist.sh")
+    assert "hotsplit_env.sh" in kv, "the KV launcher must source the shared module"
+    # The caps and compile arg must be wired into the docker run
+    assert "HOTSPLIT_CAP_ARGS" in kv or "HOTSPLIT_DOCKER_CAPS" in kv, \
+        "the KV launcher must pass the caps from the shared module"
+    assert "HOTSPLIT_COMPILE" in kv, \
+        "the KV launcher must pass the compilation config from the shared module"

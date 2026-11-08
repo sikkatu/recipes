@@ -432,32 +432,18 @@ if [ "$MOE_BACKEND" != "marlin" ] && [ "$HOTSPLIT_DRYRUN" != "1" ]; then
   echo "  per-bank expert-count patch (patches/hotsplit.py::_patch_humming_bank) handles the" >&2
   echo "  partial-bank assert; output is still experimental -- verify quality before use." >&2
 fi
+# Round 59: ONE shared module builds the HotSplit env + docker flags
+# (scripts/hotsplit_env.sh) -- identical to the KV launcher's, no duplicates.
+# The launcher values seeded above (tp4.env) flow in automatically.
+HOTSPLIT_BOOT_HOOK="$BOOT_HOOK"
+. "$HERE/hotsplit_env.sh"
 ENVS=(
   -e HF_HOME=/root/.cache/huggingface
-  -e PYTHONPATH=/w
   -e VLLM_USE_DEEP_GEMM=0
   -e VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1
   -e "VLLM_API_KEY=$API_KEY"
-  -e "HOTSPLIT_COUNTS=$HOTSPLIT_COUNTS"
-  -e "HOTSPLIT_WEIGHTS=$HOTSPLIT_WEIGHTS"
-  -e "HOTSPLIT_DRYRUN=$HOTSPLIT_DRYRUN"
-  -e "HOTSPLIT_DYNAMIC=$HOTSPLIT_DYNAMIC"
-  -e "HOTSPLIT_ALLOW_STATIC_FALLBACK=$HOTSPLIT_ALLOW_STATIC_FALLBACK"
-  -e "HOTSPLIT_HOST_FLOOR_GIB=$HOTSPLIT_HOST_FLOOR_GIB"
-  -e "HOTSPLIT_NUMA=$HOTSPLIT_NUMA"
-  -e "HOTSPLIT_NUMA_MAP=${HOTSPLIT_NUMA_MAP:-}"
-  -e "HOTSPLIT_NUMA_POLICY=$HOTSPLIT_NUMA_POLICY"
-  -e "HOTSPLIT_BOOT_HOOK=$BOOT_HOOK"
-  -e "HOTSPLIT_LIVE_COUNTS=${HOTSPLIT_LIVE_COUNTS:-/live/counts.json}"
-  -e "HOTSPLIT_LIVE_SECS=${HOTSPLIT_LIVE_SECS:-600}"
 )
-[ -n "$HOTSPLIT_HOT_GIB" ] && ENVS+=(-e "HOTSPLIT_HOT_GIB=$HOTSPLIT_HOT_GIB")
-for v in HOTSPLIT_DYN_STEPS HOTSPLIT_DYN_MAX_SWAPS HOTSPLIT_DYN_DECAY HOTSPLIT_DYN_MARGIN \
-         HOTSPLIT_DYN_PRIOR_TOKENS HOTSPLIT_DYN_LOG HOTSPLIT_TOPK HOTSPLIT_LIVE_DECODE_MAX \
-         HOTSPLIT_DYN_MAX_PLAN_ERRORS HOTSPLIT_STRICT_HOOK HOTSPLIT_VRAM_RESERVE_GIB \
-         HOTSPLIT_MAX_TOKENS HOTSPLIT_NUMA_STRICT HOTSPLIT_DYN_MAX_COMMIT_ERRORS HOTSPLIT_COUNTS_MODE; do
-  [ -n "${!v:-}" ] && ENVS+=(-e "$v=${!v}")
-done
+ENVS+=("${HOTSPLIT_ENVS[@]}")
 
 # --- model arguments: arrays, never re-parsed shell strings --------------------------------------
 MODEL_ARGS=(--model "$MODEL_ARG")
@@ -697,7 +683,7 @@ docker run -d --name "$CONTAINER" --restart no \
   --kv-cache-dtype "$KV_CACHE_DTYPE" \
   --enable-prefix-caching \
   --gpu-memory-utilization "$GPU_UTIL" \
-  --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}' \
+  ${HOTSPLIT_COMPILE_ARG} \
   --generation-config vllm \
   --reasoning-parser mimo \
   --tool-call-parser mimo \

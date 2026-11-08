@@ -197,7 +197,11 @@ def test_launcher_has_no_duplicate_flags():
     text = (RECIPE / "scripts" / "run-tp4-hotsplit.sh").read_text()
     for flag in ("--offload-backend", "--cpu-offload-gb", "--tensor-parallel-size", "--moe-backend"):
         assert text.count(flag + " ") == 1, flag
-    assert "SYS_NICE" in text and "PYTHONPATH=/w" in text
+    # Round 59: SYS_NICE / PYTHONPATH=/w live in the SHARED module the launcher
+    # sources (scripts/hotsplit_env.sh) -- the launcher keeps no duplicate list.
+    assert "hotsplit_env.sh" in text, "the launcher must source the shared module"
+    mod = (RECIPE / "scripts" / "hotsplit_env.sh").read_text()
+    assert "SYS_NICE" in mod and "PYTHONPATH=/w" in mod
 
 
 # ---------------------------------------------------------------- swap mechanics on CPU tensors (needs torch)

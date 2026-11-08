@@ -8,6 +8,10 @@
 # scripts/run-tp4-hotsplit.sh remains the INDEPENDENT recipe-only launcher.
 set -Eeuo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Round 59: tell the KV launcher WHERE the recipe is -- the delegate must not
+# rely on ~/sikkatu-recipes or ~/recipes guesses. The recipe always lives next
+# to this delegator (../recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit).
+export RECIPE_DIR="$HERE/../recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit"
 KVP_HOME="${KVP_REPO:-$HOME/kv-persistence}"
 if [ ! -x "$KVP_HOME/scripts/start-all.sh" ] && [ ! -f "$KVP_HOME/scripts/start-all.sh" ]; then
   echo "ERROR: kv-persistence not found at $KVP_HOME" >&2

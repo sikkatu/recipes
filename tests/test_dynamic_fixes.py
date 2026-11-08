@@ -351,10 +351,11 @@ def test_documented_env_reaches_container():
     recipe = BASE / "mimo-v2.6-pro-hotsplit"
     env_doc = (recipe / "tp4.env.example").read_text()
     launcher = (recipe / "scripts" / "run-tp4-hotsplit.sh").read_text()
+    shared_module = (recipe / "scripts" / "hotsplit_env.sh").read_text()
     documented = set(re.findall(r"#?\s*(HOTSPLIT_[A-Z_]+)=", env_doc))
     assert documented, "tp4.env.example documents no knobs"
     for knob in sorted(documented):
-        assert knob in launcher, f"{knob} is documented in tp4.env.example but not forwarded by run-tp4-hotsplit.sh"
+        assert knob in launcher or knob in shared_module, f"{knob} is documented in tp4.env.example but not forwarded (run-tp4-hotsplit.sh or its shared hotsplit_env.sh module)"
 
 
 def test_launcher_requires_pinned_image_and_key():

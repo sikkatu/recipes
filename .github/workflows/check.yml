@@ -10,6 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+      - name: checkout kv-persistence (cross-repo contract tests)
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          repository: sikkatu/kv-persistence
+          path: kv-persistence
       - name: shellcheck (every launcher script)
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
