@@ -98,6 +98,10 @@ def stub_env(tmp_path):
     env["LIVE_DIR"] = str(tmp_path / "live")
     env["WAIT_TRIES"] = "1"      # readiness polls: 1 (tests must not wait 30 minutes)
     env["WAIT_SLEEP"] = "0"
+    # Round 69: these suites assert launcher behaviour (bind forms, keys,
+    # identity), not hotsplit activation -- their docker stub logs no markers.
+    # The activation check itself is covered by test_activation_negative.py.
+    env["KVP_SKIP_HOTSPLIT_CHECK"] = "1"
     return env, log
 
 

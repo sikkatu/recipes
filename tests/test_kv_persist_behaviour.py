@@ -142,6 +142,9 @@ def _install_stubs(tmp_path: Path):
     env["HF_CACHE"] = str(tmp_path / "hf")
     env["LIVE_DIR"] = str(tmp_path / "live")
     env["WAIT_TRIES"] = "1"
+    # these tests assert identity/override behaviour, not hotsplit
+    # activation (their docker stub logs no markers) -- documented opt-out
+    env["KVP_SKIP_HOTSPLIT_CHECK"] = "1"
     env["WAIT_SLEEP"] = "0"
     return env, log, cli_env_log
 

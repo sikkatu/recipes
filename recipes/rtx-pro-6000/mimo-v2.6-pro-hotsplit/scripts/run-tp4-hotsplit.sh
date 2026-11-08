@@ -778,6 +778,55 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
     # A failed check is a FAILED LAUNCH: exit 1 so automation cannot mistake it for success.
     if printf '%s' "$SMOKE_JSON" | grep -q '"content":"[^"]*TP4_OK'; then
       echo "smoke test: answer contains TP4_OK -- model output verified"
+      # Round 69 (step-2 prep, review checklist): the same hotsplit/NUMA
+      # activation check the kv-persistence engine launcher runs (round 59) --
+      # without it, delegating the launch here would LOSE the check. A missing
+      # marker is a FAILED LAUNCH (exit 1). Opt out: KVP_SKIP_HOTSPLIT_CHECK=1.
+      if [ "${KVP_SKIP_HOTSPLIT_CHECK:-0}" != "1" ]; then
+        echo "hotsplit activation check:"
+        _hs_log="$(docker logs "$CONTAINER" 2>&1 || true)"
+        _hs_fail=0
+        check_marker() {
+          if printf '%s' "$_hs_log" | grep -qF "$2"; then
+            echo "  [ok] $1 -- $3"
+          else
+            echo "  [MISSING] $1 -- $3" >&2
+            _hs_fail=1
+          fi
+        }
+        _bh="${HOTSPLIT_BOOT_HOOK:-0}"
+        if [ "$_bh" = "1" ]; then
+          check_marker "boot hook" "HOOK STATUS boot_hook=ACTIVE" "the /w machinery loaded at interpreter start"
+        else
+          check_marker "boot hook (intentionally inactive)" "HOOK STATUS boot_hook=INACTIVE" "the model patches call apply_hotsplit themselves"
+        fi
+        if [ "${HOTSPLIT_DYNAMIC:-1}" = "1" ]; then
+          check_marker "dynamic hook" "step hook installed" "dynamic hot/cold mode is active"
+          check_marker "live counters" "live counter:" "routing counters are collected (basis for the plan)"
+          if printf '%s' "$_hs_log" | grep -q "live snapshot failed"; then
+            echo "  [ERROR] live counter snapshots are failing (is /live mounted and writable?)" >&2
+            _hs_fail=1
+          fi
+        fi
+        if [ "${HOTSPLIT_NUMA:-1}" = "1" ]; then
+          check_marker "numa hook" "HOOK STATUS numa_bind=ACTIVE" "NUMA binding installed (on a VM HOTSPLIT_NUMA_MAP is required)"
+        fi
+        if printf '%s' "$_hs_log" | grep -q "no eligible MXFP4 MoE layers found"; then
+          echo "  [ERROR] no MoE layers were split -- the hot bank would be empty" >&2
+          _hs_fail=1
+        fi
+        if printf '%s' "$_hs_log" | grep -qE "commit failed|rollback ALSO failed"; then
+          echo "  [ERROR] hotsplit transaction errors in the engine log" >&2
+          _hs_fail=1
+        fi
+        if [ "$_hs_fail" = "0" ]; then
+          echo "hotsplit activation: VERIFIED (hooks active, no transaction errors)."
+        else
+          echo "hotsplit activation: NOT VERIFIED -- the API answers but the hot-expert machinery is not confirmed." >&2
+          echo "Check the engine log: docker logs $CONTAINER | grep -i hotsplit" >&2
+          exit 1
+        fi
+      fi
       echo "Now run: $HERE/check-hotsplit-tp4.sh $CONTAINER"
       exit 0
     fi
