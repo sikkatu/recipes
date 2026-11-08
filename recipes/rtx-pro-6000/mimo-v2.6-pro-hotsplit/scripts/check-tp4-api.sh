@@ -8,7 +8,12 @@ set -Eeuo pipefail
 # goes out unauthenticated (the documented ALLOW_NO_AUTH loopback mode).
 kvp_curl(){
   if [ -n "${API_KEY:-}" ]; then
-    printf 'header = "Authorization: Bearer %s"\n' "$API_KEY" | curl -K - "$@"
+    # Round 66 (review): a curl config file parses " ..." quoted values --
+    # an unescaped " or \ inside the key was silently mangled (abc"def -> abc).
+    # Escape both so ANY key bytes reach the server intact.
+    _kvp_esc="${API_KEY//\\/\\\\}"
+    _kvp_esc="${_kvp_esc//\"/\\\"}"
+    printf 'header = "Authorization: Bearer %s"\n' "$_kvp_esc" | curl -K - "$@"
   else
     curl "$@"
   fi
@@ -25,9 +30,8 @@ if [ -z "${API_KEY:-}" ]; then
     fi
   done
 fi
-AUTH=()
 if [ -n "${API_KEY:-}" ]; then
-  AUTH=()   # round 65: kvp_curl sends the key on a pipe -- nothing to pass here
+  :   # round 66: kvp_curl sends the key on a pipe -- no argument array needed
 else
   echo "NOTE: no API key found (shell, tp4.env or live/api_key). If the server requires" >&2
   echo "      auth (the default), these requests will get 401/403." >&2
