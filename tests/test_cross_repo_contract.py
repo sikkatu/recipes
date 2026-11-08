@@ -16,9 +16,17 @@ from pathlib import Path
 import re
 
 RECIPES = Path(__file__).resolve().parent.parent
-KV_REPO = Path.home() / "kv-persistence"
-if not KV_REPO.is_dir():
-    KV_REPO = RECIPES.parent / "kv-persistence"
+# Round 61 (review): in GitHub Actions the second checkout lands INSIDE the
+# recipes workspace ($GITHUB_WORKSPACE/kv-persistence) -- that layout must be
+# tried FIRST, or the cross-repo tests skip in CI even though the checkout
+# succeeded. Developer layouts (sibling / home) stay as fallbacks.
+_KV_CANDIDATES = [
+    RECIPES / "kv-persistence",                       # CI: second checkout in-workspace
+    Path.home() / "kv-persistence",                   # developer home layout
+    RECIPES.parent / "kv-persistence",                # sibling clones
+    Path.home() / "sikkatu-kv-persistence",
+]
+KV_REPO = next((c for c in _KV_CANDIDATES if c.is_dir()), _KV_CANDIDATES[0])
 RECIPE = RECIPES / "recipes" / "rtx-pro-6000" / "mimo-v2.6-pro-hotsplit"
 SKIP_REASON = "kv-persistence clone not available next to recipes (cross-repo check)"
 
