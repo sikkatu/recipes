@@ -1,0 +1,299 @@
+"""Round 70: delegation tests -- KVP_ENGINE=recipe (review step-2 checklist).
+
+Every checklist item, verified without hardware (stub docker/curl):
+
+1. WITHOUT the flag nothing changes -- the default path launches the KV
+   launcher, not the recipe one (the byte-level contract is the snapshot
+   test in test_activation_negative.py).
+2. WITH KVP_ENGINE=recipe: the recipe launcher runs, its activation-failure
+   exit code REACHES the caller (start-all foreground), and the recorded
+   container name is the one stop-engine.sh uses.
+3. ONE key source: the shared key is exported in the environment; it must
+   never appear in argv (ps).
+4. KV_CACHE_DTYPE: the delegation pins bfloat16 (the recipe default is
+   auto) -- the difference is SHOWN here, never normalized away, and the
+   identity hash must account for the dtype (each dtype -> its own
+   namespace; the auto->bfloat16 resolution contract is asserted in the
+   launcher source so the pin cannot move the warmed cache's namespace).
+"""
+from __future__ import annotations
+import os
+import stat
+import subprocess
+from pathlib import Path
+
+import pytest
+
+RECIPES = Path(__file__).resolve().parent.parent
+KV_REPO = next(
+    (c for c in (
+        RECIPES / "kv-persistence",
+        Path.home() / "kv-persistence",
+        RECIPES.parent / "kv-persistence",
+    ) if c.is_dir()),
+    None,
+)
+RECIPE = RECIPES / "recipes" / "rtx-pro-6000" / "mimo-v2.6-pro-hotsplit"
+SKIP = "kv-persistence checkout not found (delegation tests need it)"
+
+GOOD_MARKERS = """HOOK STATUS boot_hook=INACTIVE
+hotsplit dynamic: step hook installed on GPUModelRunnerImpl (update every 2000 steps, <=2 swaps/layer, margin 1.25)
+hotsplit live counter: 69 layers -> /live/counts.json
+HOOK STATUS numa_bind=ACTIVE
+"""
+
+STUB = '''#!/usr/bin/env bash
+echo "$0 $*" >> "$STUB_LOG"
+case "$(basename "$0")" in
+  docker)
+    case "$1" in
+      info) exit 0 ;;
+      container) exit 1 ;;
+      inspect) echo "running exit=0 oom=false"; exit 0 ;;
+      logs) printf '%s' "${STUB_DOCKER_LOGS:-}" ;;
+      ps) exit 0 ;;
+      run)
+        case "$*" in
+          *--rm*) echo "/usr/local/lib/python3.12/dist-packages"; exit 0 ;;
+        esac
+        echo "STUB_DOCKER_RUN" >> "$STUB_LOG"
+        exit 0 ;;
+    esac
+    exit 0 ;;
+  nvidia-smi) [ "$1" = "-L" ] && for i in 1 2 3 4; do echo "GPU $i: STUB"; done; exit 0 ;;
+  curl)
+    case "$*" in
+      *"/v1/models"*) echo '{"data":[{"id":"mimo-pro"}]}' ;;
+      *"/v1/chat/completions"*) echo '{"choices":[{"message":{"content":"TP4_OK"},"finish_reason":"stop"}]}' ;;
+      *) echo '{}' ;;
+    esac
+    exit 0 ;;
+  sha256sum) exec /usr/bin/sha256sum "$@" ;;
+  *) exit 0 ;;
+esac
+'''
+
+
+@pytest.fixture()
+def stub_env(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "stub.log"
+    for name in ("docker", "nvidia-smi", "curl", "sha256sum"):
+        p = bin_dir / name
+        p.write_text(STUB)
+        p.chmod(p.stat().st_mode | stat.S_IEXEC)
+    for d in ("model", "home", "live"):
+        (tmp_path / d).mkdir()
+    home = tmp_path / "home"
+    (home / ".config" / "kvp").mkdir(parents=True)
+    key_file = home / ".config" / "kvp" / "api_key"
+    key_file.write_text("sharedkey123\n")
+    key_file.chmod(0o600)
+    # the cache step of start-all needs the real lmcache CLI -- a running-PID
+    # stub makes it skip; these tests exercise the ENGINE step only
+    (tmp_path / "live" / "lmcache-server.pid").write_text(str(os.getpid()))
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["STUB_LOG"] = str(log)
+    env["MODEL_DIR"] = str(tmp_path / "model")
+    env["HF_CACHE"] = str(tmp_path / "hf")
+    env["LIVE_DIR"] = str(tmp_path / "live")
+    env["HOME"] = str(home)
+    env["KVP_API_KEY_FILE"] = str(key_file)
+    env["KVP_CACHE_ROOT"] = str(tmp_path / "live")
+    env["WAIT_TRIES"] = "1"
+    env["WAIT_SLEEP"] = "0"
+    env["KVP_SKIP_HOTSPLIT_CHECK"] = "1"
+    # A FAKE kv-persistence checkout with a stub identity gate -- the same
+    # device as test_kv_persist_behaviour (round 34). The mandatory gate needs
+    # a real identity (hardware/setup territory); the DELEGATION wiring is
+    # what these tests assert. The stub gate logs and passes.
+    kvp = tmp_path / "kv-persistence"
+    (kvp / "implementation" / "kvpersist").mkdir(parents=True)
+    (kvp / "implementation" / "kvpersist" / "cli.py").write_text("# stub\n")
+    (kvp / "KVP_COMPAT_VERSION").write_text("1\n")
+    (kvp / "scripts").mkdir(exist_ok=True)
+    gate = kvp / "scripts" / "verify-engine-identity.sh"
+    gate.write_text(
+        '#!/usr/bin/env bash\n'
+        'echo "$0 $*" >> "$STUB_LOG"\n'
+        'case "$*" in\n'
+        '  *--check-config-only*) exit "${GATE_PRE_RC:-${GATE_RC:-0}}" ;;\n'
+        'esac\n'
+        'exit "${GATE_RC:-0}"\n'
+    )
+    gate.chmod(gate.stat().st_mode | stat.S_IEXEC)
+    env["KVP_REPO"] = str(kvp)
+    env["KVP_COMPAT_VERSION"] = "1"
+    # the KV_PERSIST block derives the namespace via the kv identity CLI
+    # (needs a real 40-hex model revision) -- the documented escape hatch
+    env["KV_PERSIST_NAMESPACE"] = "test-namespace"
+    return env, log, tmp_path
+
+
+def _start_all(env, log, extra, marker_logs=""):
+    if log.exists():
+        log.unlink()
+    e = {**env, "STUB_DOCKER_LOGS": marker_logs, **extra}
+    return subprocess.run(
+        ["bash", str(KV_REPO / "scripts" / "start-all.sh")], env=e,
+        capture_output=True, text=True, timeout=180)
+
+
+def _docker_run_line(log: Path):
+    if not log.exists():
+        return None
+    for line in log.read_text().splitlines():
+        if "docker run " in line and "--rm" not in line:
+            return line
+    return None
+
+
+def test_default_engine_is_the_kv_launcher(stub_env):
+    """Checklist 1: WITHOUT the flag start-all launches the kv launcher."""
+    if KV_REPO is None:
+        pytest.skip(SKIP)
+    env, log, _ = stub_env
+    r = _start_all(env, log, {"RECIPE_DIR": str(RECIPE),
+                              "IMAGE": "x@sha256:" + "a" * 64,
+                              # this test asserts the LAUNCHER CHOICE only --
+                              # skip the cache pre-flight (needs a live server)
+                              "KVP_PERSIST_ENABLED": "false"}, GOOD_MARKERS)
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out[-800:]
+    # the kv launcher's own signals: its container name in the docker run and
+    # NO delegation banner (the recipe path prints "KVP_ENGINE=recipe:")
+    assert "KVP_ENGINE=recipe" not in out, "the default path must NOT delegate"
+    line = _docker_run_line(log)
+    assert line and "--name mimo-pro-tp4-kvp" in line, line
+
+
+def test_recipe_path_launches_the_recipe_launcher(stub_env):
+    """WITH KVP_ENGINE=recipe the recipe launcher runs and the recorded
+    container name matches its own --name (ONE name source)."""
+    if KV_REPO is None:
+        pytest.skip(SKIP)
+    env, log, _ = stub_env
+    r = _start_all(env, log, {"RECIPE_DIR": str(RECIPE), "KVP_ENGINE": "recipe",
+                   "IMAGE": "x@sha256:" + "a" * 64}, GOOD_MARKERS)
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out[-800:]
+    assert "KVP_ENGINE=recipe" in out
+    rec = (KV_REPO / "live" / "engine_container").read_text().strip()
+    assert rec == "mimo-pro-tp4-hotsplit", rec
+    line = _docker_run_line(log)
+    assert line and f"--name {rec}" in line, line
+
+
+def test_recipe_path_key_never_in_argv(stub_env):
+    """Checklist 4: the shared key travels in the environment, never in argv."""
+    if KV_REPO is None:
+        pytest.skip(SKIP)
+    env, log, _ = stub_env
+    r = _start_all(env, log, {"RECIPE_DIR": str(RECIPE), "KVP_ENGINE": "recipe",
+                   "IMAGE": "x@sha256:" + "a" * 64}, GOOD_MARKERS)
+    assert log.exists(), (r.stdout + r.stderr)[-600:]
+    for line in log.read_text().splitlines():
+        assert "sharedkey123" not in line, f"key leaked into argv: {line[:120]}"
+
+
+def test_recipe_path_exit_code_reaches_the_caller(stub_env):
+    """Checklist 2: a FAILED activation in the recipe launcher must fail
+    start-all with the SAME exit code -- never swallowed."""
+    if KV_REPO is None:
+        pytest.skip(SKIP)
+    env, log, _ = stub_env
+    e = {**env, "STUB_DOCKER_LOGS": "no markers here\n",
+         "RECIPE_DIR": str(RECIPE), "KVP_ENGINE": "recipe",
+         "IMAGE": "x@sha256:" + "a" * 64,
+         "KVP_SKIP_HOTSPLIT_CHECK": "0"}
+    if log.exists():
+        log.unlink()
+    r = subprocess.run(["bash", str(KV_REPO / "scripts" / "start-all.sh")], env=e,
+                       capture_output=True, text=True, timeout=180)
+    out = r.stdout + r.stderr
+    assert r.returncode == 1, (
+        f"the recipe launcher's exit 1 must reach the caller, got {r.returncode}\n{out[-800:]}")
+    assert "NOT VERIFIED" in out or "activation" in out, out[-800:]
+
+
+def test_stop_engine_reads_the_recorded_container(stub_env):
+    """Checklist 3: stop-engine.sh (kvp down / stop-all.sh) stops the
+    container that was ACTUALLY started -- the one recorded by start-all."""
+    if KV_REPO is None:
+        pytest.skip(SKIP)
+    env, log, _ = stub_env
+    rec_file = KV_REPO / "live" / "engine_container"
+    rec_file.parent.mkdir(parents=True, exist_ok=True)
+    rec_file.write_text("mimo-pro-tp4-hotsplit\n")
+    try:
+        if log.exists():
+            log.unlink()
+        r = subprocess.run(["bash", str(KV_REPO / "scripts" / "stop-engine.sh")],
+                           env=env, capture_output=True, text=True, timeout=60)
+        out = r.stdout + r.stderr
+        assert "mimo-pro-tp4-hotsplit" in out, (
+            f"stop-engine must resolve the recorded container name:\n{out}")
+    finally:
+        rec_file.unlink(missing_ok=True)
+
+
+def test_kv_cache_dtype_pin_and_identity(stub_env):
+    """Checklist 5: the delegation pins bfloat16 while the recipe default is
+    auto -- the difference stays VISIBLE (not normalized away), the identity
+    hash accounts for the dtype (each dtype -> its own namespace), and the
+    auto->bfloat16 resolution is documented in the launcher source so the pin
+    cannot move the warmed cache's namespace."""
+    if KV_REPO is None:
+        pytest.skip(SKIP)
+    env, _, _ = stub_env
+
+    # (a) the recipe default is auto; the delegation pins bfloat16 explicitly
+    recipe_text = (RECIPE / "scripts" / "run-tp4-hotsplit.sh").read_text()
+    assert 'KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"' in recipe_text, (
+        "the recipe default is auto -- the delegation pin must be explicit")
+    start_all = (KV_REPO / "scripts" / "start-all.sh").read_text()
+    assert 'KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-bfloat16}"' in start_all, (
+        "the delegation must pin KV_CACHE_DTYPE=bfloat16")
+
+    # (b) the identity hash accounts for the dtype: build a real CacheIdentity
+    # per dtype and compare the namespace hashes
+    def ns_for(dtype: str) -> str:
+        script = (
+            "import sys, json, hashlib; "
+            f"sys.path.insert(0, r'{KV_REPO / 'implementation'}'); "
+            "from kvpersist.identity import CacheIdentity; "
+            "i = CacheIdentity("
+            "model_id='m', model_revision='a'*40, "
+            "tokenizer_name='t', tokenizer_revision='b'*40, "
+            f"kv_cache_dtype={dtype!r}, "
+            "block_size=16, num_kv_heads=8, head_dim=192, tp_size=4, "
+            "connector='LMCacheMPConnector', connector_version='0.5.6', "
+            "max_model_len=1024, chat_template_digest='c'*64, "
+            "l2_serde='zstd'); "
+            "print(hashlib.sha256(json.dumps(i.canonical(), sort_keys=True)"
+            ".encode()).hexdigest()[:16])"
+        )
+        r = subprocess.run(["python3", "-c", script],
+                           capture_output=True, text=True, timeout=60)
+        assert r.returncode == 0, (
+            f"identity build failed for {dtype}: {r.stderr[-400:]}")
+        return r.stdout.strip()
+
+    ns_bf16 = ns_for("bfloat16")
+    ns_fp16 = ns_for("float16")
+    ns_fp32 = ns_for("float32")
+    assert len({ns_bf16, ns_fp16, ns_fp32}) == 3, (
+        "the identity hash must change with the dtype (each dtype -> its own "
+        f"namespace): bf16={ns_bf16} fp16={ns_fp16} fp32={ns_fp32}")
+
+    # (c) the auto -> bfloat16 resolution contract (what makes the pin safe):
+    # the kv launcher resolves auto to the model dtype (bfloat16 for MiMo), so
+    # an auto recipe run and the pinned bfloat16 delegation share the
+    # namespace. Assert the documented resolution in the source.
+    kv_launcher = (KV_REPO / "scripts" / "run-vllm-with-persist.sh").read_text()
+    assert "resolves `auto` the same way" in kv_launcher or \
+           'resolves "auto" the same way' in kv_launcher or \
+           "resolves `auto`" in kv_launcher, (
+        "the auto->model-dtype resolution must be documented in the kv launcher")
