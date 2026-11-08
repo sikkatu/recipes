@@ -93,7 +93,8 @@ def test_api_key_actually_passed_to_server():
     for slug in RECIPES:
         for p in _launchers(slug):
             text = p.read_text()
-            assert "VLLM_API_KEY=$API_KEY" in text, f"{p}: API key must be passed to the server"
+            assert "--env-file" in text and "VLLM_API_KEY=" in text, \
+        f"{p}: API key must be passed to the server via --env-file (not on the command line)"
 
 
 def test_both_probe_requests_authenticated():

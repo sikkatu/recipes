@@ -51,6 +51,10 @@ ALLOW_NO_AUTH="${ALLOW_NO_AUTH:-0}"
 # The kv-persistence cache (LMCACHE_L2_SERDE) folds this; opt out:
 #   LMCACHE_L2_SERDE=none  (byte-exact raw) / =lz4 (faster, larger)
 LMCACHE_L2_SERDE="${LMCACHE_L2_SERDE:-zstd}"
+# Round 63 (review): the default was computed but never used -- export it so
+# the value actually reaches the container env and the kv-persistence
+# identity gate (both read LMCACHE_L2_SERDE).
+export LMCACHE_L2_SERDE
 LIVE_DIR="${LIVE_DIR:-$PWD/live}"
 # Round 56 (user): ONE API key for BOTH repos (kv-persistence + recipes).
 # Canonical file: $HOME/.config/kvp/api_key. A legacy per-repo live/api_key
@@ -437,11 +441,19 @@ fi
 # The launcher values seeded above (tp4.env) flow in automatically.
 HOTSPLIT_BOOT_HOOK="$BOOT_HOOK"
 . "$HERE/hotsplit_env.sh"
+# Round 63 (review): the API key must NOT appear in `ps` output. Write it to
+# a chmod-600 env-file for docker --env-file and to a curl config file for the
+# bearer header; never pass it on a command line.
+umask 077
+printf 'VLLM_API_KEY=%s\n' "$API_KEY" > "$LIVE_DIR/.engine-env"
+chmod 600 "$LIVE_DIR/.engine-env"
+printf 'header = "Authorization: Bearer %s"\n' "$API_KEY" > "$LIVE_DIR/.curl-header"
+chmod 600 "$LIVE_DIR/.curl-header"
 ENVS=(
   -e HF_HOME=/root/.cache/huggingface
   -e VLLM_USE_DEEP_GEMM=0
   -e VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1
-  -e "VLLM_API_KEY=$API_KEY"
+  --env-file "$LIVE_DIR/.engine-env"
 )
 ENVS+=("${HOTSPLIT_ENVS[@]}")
 
@@ -468,7 +480,7 @@ fi
 # under a namespace-coded path derived from the verified cache identity. This
 # block applies the SAME mechanism here:
 #   1. prefer the real identity hash from a local kv-persistence checkout
-#      (KVP_REPO_ROOT / ~/kv-persistence): `python3 -m kvpersist.cli model-name`.
+#      (KVP_REPO / ~/kv-persistence): `python3 -m kvpersist.cli model-name`.
 #      The REAL engine arguments are passed through as KVP_* overrides so the
 #      namespace follows the runtime values, not the shipped pins. KV_CACHE_DTYPE
 #      is RESOLVED first (`auto` -> the model's actual dtype from config.json) so
@@ -503,7 +515,7 @@ if [ "$KV_PERSIST" = "1" ]; then
   # launch hashed the namespace from -- a non-default run (KV_CACHE_DTYPE=fp8,
   # MAX_MODEL_LEN=524288, TP!=4) verifies clean instead of being blocked by a
   # MISMATCH against the shipped identity.env pins.
-  KVP_REPO="${KVP_REPO_ROOT:-$HOME/kv-persistence}"
+  KVP_REPO="${KVP_REPO:-${KVP_REPO_ROOT:-$HOME/kv-persistence}}"   # both spellings accepted
   # Review fix (round 34, P2): verify the kv-persistence checkout is a
   # COMPATIBLE version before relying on its CLI or identity gate. The
   # pin lives in $KVP_REPO/KVP_COMPAT_VERSION (currently "1"). Bump it
@@ -590,7 +602,7 @@ PYEFF
       # fallback hid "cannot derive LMCache model_name: ..." behind a
       # misleading "kv-persistence not found" message).
       KV_PERSIST_NAMESPACE="$(
-        KVP_REPO_ROOT="$KVP_REPO" \
+        KVP_REPO="$KVP_REPO" \
         KVP_SERVED_MODEL_NAME="${KVP_SERVED_MODEL_NAME:-${SERVED_MODEL_NAME:-mimo-pro}}" \
         KVP_KV_CACHE_DTYPE="$KV_EFFECTIVE_DTYPE" \
         KVP_MAX_MODEL_LEN="$MAX_MODEL_LEN" \
@@ -659,7 +671,7 @@ Fix configs/.../identity.env(.local) and rerun."
     echo "KV_PERSIST=1: identity gate PASSED -- persistent cache is trusted"
   else
     die "KV_PERSIST=1 requires kv-persistence's verify-engine-identity.sh at $KVP_REPO/scripts/.
-Clone https://github.com/sikkatu/kv-persistence (set KVP_REPO_ROOT if non-standard).
+Clone https://github.com/sikkatu/kv-persistence (set KVP_REPO if non-standard).
 Without the identity gate cache reuse is REFUSED by policy."
   fi
 fi
@@ -731,7 +743,7 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
   else
     printf '[%3ds] container=%s  %d new log line(s)\n' "$ELAPSED" "${RUN_STATE%% *}" "$NEW_COUNT"
   fi
-  if curl -fsS --max-time 3 -H "Authorization: Bearer $API_KEY" "http://$URLHOST:$PORT/v1/models" > "$MODELS_JSON" 2>/dev/null; then
+  if curl -fsS --max-time 3 -K "$LIVE_DIR/.curl-header" "http://$URLHOST:$PORT/v1/models" > "$MODELS_JSON" 2>/dev/null; then
     cat "$MODELS_JSON"; echo
     # Review fix (round 24): the smoke request must use the ACTUAL served model
     # name (a hard-coded "mimo-pro" got 404 on any other SERVED_MODEL_NAME and
@@ -770,7 +782,7 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
       echo "KV_PERSIST=1: identity verified -- persistent cache attached and trusted"
     fi
     SMOKE_BODY="$(SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-mimo-pro}" python3 -c 'import json,os,sys; print(json.dumps({"model": os.environ.get("SERVED_MODEL_NAME","mimo-pro"), "messages":[{"role":"user","content":"Reply exactly TP4_OK"}], "max_tokens":64, "temperature":0}))')"
-    SMOKE_JSON="$(curl -fsS --max-time 120 -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+    SMOKE_JSON="$(curl -fsS --max-time 120 -K "$LIVE_DIR/.curl-header" -H 'Content-Type: application/json' \
       "http://$URLHOST:$PORT/v1/chat/completions" \
       -d "$SMOKE_BODY" || true)"
     echo "$SMOKE_JSON"

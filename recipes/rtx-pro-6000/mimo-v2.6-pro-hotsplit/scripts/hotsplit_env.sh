@@ -1,3 +1,5 @@
+# Cross-repo compatibility pin (round 63) -- must match kv-persistence.
+KVP_COMPAT_VERSION=1
 #!/usr/bin/env bash
 # hotsplit_env.sh -- ONE place that builds the HotSplit container env + docker args.
 #

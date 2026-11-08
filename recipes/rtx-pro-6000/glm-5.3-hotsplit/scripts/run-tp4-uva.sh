@@ -75,6 +75,15 @@ if [ -z "$API_KEY" ]; then
     echo "(not printed here; check-tp4-api.sh and manage.sh read it automatically)."
   fi
 fi
+# Round 63: write the API key to a chmod-600 env-file for docker --env-file
+# (never on the command line -- `ps` exposed it). Also a curl config file.
+if [ -n "$API_KEY" ]; then
+  umask 077
+  printf 'VLLM_API_KEY=%s\n' "$API_KEY" > "$LIVE_DIR/.engine-env"
+  chmod 600 "$LIVE_DIR/.engine-env"
+  printf 'header = "Authorization: Bearer %s"\n' "$API_KEY" > "$LIVE_DIR/.curl-header"
+  chmod 600 "$LIVE_DIR/.curl-header"
+fi
 if [ -n "$API_KEY" ] && [ ! -f "$KEY_FILE" ]; then
   umask 077
   printf '%s\n' "$API_KEY" > "$KEY_FILE"
@@ -185,7 +194,7 @@ docker run -d --name "$CONTAINER" --restart no \
   -e HF_HOME=/root/.cache/huggingface \
   -e VLLM_USE_DEEP_GEMM=0 \
   -e VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1 \
-  -e "VLLM_API_KEY=$API_KEY" \
+  --env-file "$LIVE_DIR/.engine-env" \
   "${MOUNTS[@]}" "$IMAGE" \
   "${MODEL_ARGS[@]}" \
   --served-model-name glm53 \

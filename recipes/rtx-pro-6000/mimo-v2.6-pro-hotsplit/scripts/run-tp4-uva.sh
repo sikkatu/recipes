@@ -51,6 +51,10 @@ ALLOW_NO_AUTH="${ALLOW_NO_AUTH:-0}"
 # The kv-persistence cache (LMCACHE_L2_SERDE) folds this; opt out:
 #   LMCACHE_L2_SERDE=none  (byte-exact raw) / =lz4 (faster, larger)
 LMCACHE_L2_SERDE="${LMCACHE_L2_SERDE:-zstd}"
+# Round 63 (review): the default was computed but never used -- export it so
+# the value actually reaches the container env and the kv-persistence
+# identity gate (both read LMCACHE_L2_SERDE).
+export LMCACHE_L2_SERDE
 LIVE_DIR="${LIVE_DIR:-$PWD/live}"
 # Round 56 (user): ONE API key for BOTH repos -- canonical file
 # $HOME/.config/kvp/api_key (shared with kv-persistence and the hotsplit
@@ -108,6 +112,15 @@ if [ -z "$API_KEY" ]; then
     echo "API key auto-generated for the loopback server and saved to $KEY_FILE"
     echo "(not printed here; check-tp4-api.sh and manage.sh read it automatically)."
   fi
+fi
+# Round 63: write the API key to a chmod-600 env-file for docker --env-file
+# (never on the command line -- `ps` exposed it). Also a curl config file.
+if [ -n "$API_KEY" ]; then
+  umask 077
+  printf 'VLLM_API_KEY=%s\n' "$API_KEY" > "$LIVE_DIR/.engine-env"
+  chmod 600 "$LIVE_DIR/.engine-env"
+  printf 'header = "Authorization: Bearer %s"\n' "$API_KEY" > "$LIVE_DIR/.curl-header"
+  chmod 600 "$LIVE_DIR/.curl-header"
 fi
 if [ -n "$API_KEY" ] && [ ! -f "$KEY_FILE" ]; then
   umask 077
@@ -529,7 +542,7 @@ docker run -d --name "$CONTAINER" --restart no \
   -e HF_HOME=/root/.cache/huggingface \
   -e VLLM_USE_DEEP_GEMM=0 \
   -e VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1 \
-  -e "VLLM_API_KEY=$API_KEY" \
+  --env-file "$LIVE_DIR/.engine-env" \
   "${MOUNTS[@]}" "$IMAGE" \
   "${MODEL_ARGS[@]}" \
   --served-model-name "${SERVED_MODEL_NAME:-mimo-pro}" \

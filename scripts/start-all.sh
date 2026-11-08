@@ -12,7 +12,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # rely on ~/sikkatu-recipes or ~/recipes guesses. The recipe always lives next
 # to this delegator (../recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit).
 export RECIPE_DIR="$HERE/../recipes/rtx-pro-6000/mimo-v2.6-pro-hotsplit"
-KVP_HOME="${KVP_REPO:-$HOME/kv-persistence}"
+KVP_HOME="${KVP_REPO:-${KVP_REPO_ROOT:-$HOME/kv-persistence}}"   # both spellings accepted (round 63)
 if [ ! -x "$KVP_HOME/scripts/start-all.sh" ] && [ ! -f "$KVP_HOME/scripts/start-all.sh" ]; then
   echo "ERROR: kv-persistence not found at $KVP_HOME" >&2
   echo "Clone it first: git clone https://github.com/sikkatu/kv-persistence ~/kv-persistence" >&2
