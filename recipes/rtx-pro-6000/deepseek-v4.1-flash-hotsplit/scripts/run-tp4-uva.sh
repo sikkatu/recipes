@@ -18,10 +18,20 @@ ALLOW_NO_AUTH="${ALLOW_NO_AUTH:-0}"
 # server on a routable address is always authenticated). ALLOW_NO_AUTH=1 is accepted ONLY
 # together with a proven loopback bind (127.0.0.1 or ::1).
 LIVE_DIR="${LIVE_DIR:-$PWD/live}"
-KEY_FILE="$LIVE_DIR/api_key"
-mkdir -p "$LIVE_DIR"
+# Round 58: ONE API key for BOTH repos -- canonical file
+# $HOME/.config/kvp/api_key (shared with kv-persistence). A legacy per-repo
+# live/api_key is migrated here, and the canonical key is ALWAYS mirrored back
+# to live/api_key so older tooling (manage.sh, check-tp4-api.sh) finds it.
+KEY_FILE="${KVP_API_KEY_FILE:-$HOME/.config/kvp/api_key}"
+mkdir -p "$LIVE_DIR" "$(dirname "$KEY_FILE")"
+if [ ! -f "$KEY_FILE" ] && [ -f "$LIVE_DIR/api_key" ]; then
+  cp "$LIVE_DIR/api_key" "$KEY_FILE"
+  chmod 600 "$KEY_FILE"
+  echo "API key migrated to the shared location: $KEY_FILE"
+fi
 if [ -z "$API_KEY" ] && [ -f "$KEY_FILE" ]; then
-  API_KEY="$(head -n1 "$KEY_FILE" | tr -d '[:space:]')"
+  { IFS= read -r API_KEY || true; } < "$KEY_FILE"
+  API_KEY="${API_KEY//[$'\t\r\n ']/}"
 fi
 gen_key() {
   if command -v openssl >/dev/null 2>&1; then
@@ -69,6 +79,21 @@ if [ -n "$API_KEY" ] && [ ! -f "$KEY_FILE" ]; then
   umask 077
   printf '%s\n' "$API_KEY" > "$KEY_FILE"
   chmod 600 "$KEY_FILE"
+fi
+# Round 58: ALWAYS keep live/api_key in sync with the canonical key so older
+# tooling (manage.sh, check-tp4-api.sh) never reports "requires a key" when
+# the key exists. Security unchanged: chmod 600, gitignored, nothing new exposed.
+if [ -n "$API_KEY" ]; then
+  umask 077
+  _cur=""
+  if [ -f "$LIVE_DIR/api_key" ]; then
+    { IFS= read -r _cur || true; } < "$LIVE_DIR/api_key"
+    _cur="${_cur//[$'\t\r\n ']/}"
+  fi
+  if [ "$_cur" != "$API_KEY" ]; then
+    printf '%s\n' "$API_KEY" > "$LIVE_DIR/api_key"
+    chmod 600 "$LIVE_DIR/api_key"
+  fi
 fi
 
 # --- contract: image digests, always (no :latest, no floating tags) -------------------------------

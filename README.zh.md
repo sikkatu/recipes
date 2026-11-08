@@ -63,7 +63,9 @@ kv-persistence 项目（https://github.com/sikkatu/kv-persistence）在这些配
 
 * **一条命令** -- 在 kv-persistence 中 `bash scripts/start-all.sh` 启动
   监控 + 缓存 + vLLM 引擎（默认启用配方的动态热/冷专家）。
-  `bash scripts/stop-all.sh` 停止全部（数据保留）。
+  `bash scripts/stop-all.sh` 停止全部（数据保留）。同一命令也可在本仓库中运行 ——
+  这里的 `bash scripts/start-all.sh` 会委托到 kv-persistence（若 kv-persistence
+  位于其他位置，请设置 `KVP_REPO=`）。
 * **一个 API 密钥** -- 两个仓库共用 `$HOME/.config/kvp/api_key`
   （首次启动自动生成，chmod 600；覆盖：`KVP_API_KEY_FILE=`）。
   旧版 `live/api_key` 自动迁移。

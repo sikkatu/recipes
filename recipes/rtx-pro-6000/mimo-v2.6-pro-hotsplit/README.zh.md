@@ -269,6 +269,9 @@ MiMo-V2.6-Pro 在 69 个 MoE 层中的每一层从 384 个专家中路由 8 个�
 `LMCACHE_HOST`（缓存侧）↔ `KV_PERSIST_HOST`（配方侧）。
 
 完整安装、持久化验证与回滚见
-[kv-persistence wiki](https://github.com/sikkatu/kv-persistence/wiki)。恢复验收
-（`test-recovery.sh`）仍需 GPU 主机实际运行 —— 诚实状态见 kv-persistence 的
-`docs/final-report.md`。
+
+**版本契约：** 两侧均锁定 **lmcache 0.5.6**（主机 venv 与 vLLM 镜像必须一致
+——启动器拒绝混合的次版本）。
+[kv-persistence wiki](https://github.com/sikkatu/kv-persistence/wiki)。恢复验收（`test-recovery.sh`）已在目标 GPU 主机上通过（2026-11-07，
+`cached_tokens=2560`，L2 读取事件 = 1，机器判定 PASS）——证据见
+kv-persistence `docs/final-report.md`。

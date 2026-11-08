@@ -6,9 +6,11 @@ set -Eeuo pipefail
 BASE="${1:-${BASE:-http://127.0.0.1:30007}}"
 # the launcher persists its auto-generated key in live/api_key -- use it when the shell has none
 if [ -z "${API_KEY:-}" ]; then
-  for _kf in "live/api_key" "$PWD/live/api_key" "$(dirname "$0")/../live/api_key"; do
+  # Canonical shared key first (round 56/58), then the local mirror.
+  for _kf in "${KVP_API_KEY_FILE:-$HOME/.config/kvp/api_key}" "live/api_key" "$PWD/live/api_key" "$(dirname "$0")/../live/api_key"; do
     if [ -f "$_kf" ]; then
-      API_KEY="$(head -n1 "$_kf" | tr -d '[:space:]')"
+      { IFS= read -r API_KEY || true; } < "$_kf"
+      API_KEY="${API_KEY//[$'\t\r\n ']/}"
       break
     fi
   done

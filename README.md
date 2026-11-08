@@ -67,7 +67,9 @@ run together with **zero manual configuration**:
 * **ONE command** -- `bash scripts/start-all.sh` in kv-persistence starts
   observability + cache + the vLLM engine (with the recipe's dynamic
   hot/cold experts by default). `bash scripts/stop-all.sh` stops everything
-  (data kept).
+  (data kept). The same command works FROM THIS REPO too --
+  `bash scripts/start-all.sh` here delegates to kv-persistence (or set
+  `KVP_REPO=` if kv-persistence lives elsewhere).
 * **ONE API key** -- both repos share `$HOME/.config/kvp/api_key`
   (auto-generated on first launch, chmod 600; override: `KVP_API_KEY_FILE=`).
   A legacy per-repo `live/api_key` is migrated automatically.

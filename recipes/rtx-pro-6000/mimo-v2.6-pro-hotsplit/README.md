@@ -226,7 +226,10 @@ this recipe connects with `KV_PERSIST_PORT` (default 5555). If you change the po
 the cache side, set `KV_PERSIST_PORT` here to the SAME value or vLLM cannot reach the
 cache. Same for the host: `LMCACHE_HOST` (cache side) ↔ `KV_PERSIST_HOST` (recipe side).
 
+
+**Version contract:** both sides pin **lmcache 0.5.6** (host venv and the
+vLLM image must match -- the launcher refuses mixed minor versions).
 Full setup, persistence verification and rollback: the
-[kv-persistence wiki](https://github.com/sikkatu/kv-persistence/wiki). Recovery
-acceptance (`test-recovery.sh`) still requires a GPU host run — see kv-persistence
-`docs/final-report.md` for the honest status.
+[kv-persistence wiki](https://github.com/sikkatu/kv-persistence/wiki). Recovery acceptance (`test-recovery.sh`) PASSED on the target GPU host
+(2026-11-07, `cached_tokens=2560`, L2 read events = 1, machine verdict PASS)
+-- evidence in kv-persistence `docs/final-report.md`.

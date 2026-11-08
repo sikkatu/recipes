@@ -114,6 +114,21 @@ if [ -n "$API_KEY" ] && [ ! -f "$KEY_FILE" ]; then
   printf '%s\n' "$API_KEY" > "$KEY_FILE"
   chmod 600 "$KEY_FILE"
 fi
+# Round 58: ALWAYS keep live/api_key in sync with the canonical key. Older
+# tooling (manage.sh, check-tp4-api.sh, quality-compare.sh, bench scripts)
+# reads live/api_key; when the shared key already existed these tools saw no
+# key and reported "API requires a key" although the key exists. Mirror it
+# on EVERY launch (create or refresh). Security is unchanged: the key file is
+# chmod 600 and gitignored; nothing new is exposed.
+if [ -n "$API_KEY" ]; then
+  umask 077
+  _cur=""
+  [ -f "$LIVE_DIR/api_key" ] && _cur="$(head -n1 "$LIVE_DIR/api_key" | tr -d '[:space:]')"
+  if [ "$_cur" != "$API_KEY" ]; then
+    printf '%s\n' "$API_KEY" > "$LIVE_DIR/api_key"
+    chmod 600 "$LIVE_DIR/api_key"
+  fi
+fi
 
 # --- contract: image digests, always (no :latest, no floating tags) -------------------------------
 IMAGE="${IMAGE:-}"
