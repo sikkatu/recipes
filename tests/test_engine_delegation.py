@@ -11,10 +11,13 @@ Every checklist item, verified without hardware (stub docker/curl):
 3. ONE key source: the shared key is exported in the environment; it must
    never appear in argv (ps).
 4. KV_CACHE_DTYPE: the delegation pins bfloat16 (the recipe default is
-   auto) -- the difference is SHOWN here, never normalized away, and the
-   identity hash must account for the dtype (each dtype -> its own
-   namespace; the auto->bfloat16 resolution contract is asserted in the
-   launcher source so the pin cannot move the warmed cache's namespace).
+   auto) -- the difference is SHOWN here, never normalized away. The
+   substitution itself is verified BEHAVIOURALLY (round 72, review: a
+   comment check is weak): the real resolve_effective_identity is run
+   against a fake config.json (torch_dtype: bfloat16) -- `auto` and the
+   pinned `bfloat16` resolve to the SAME value and the SAME cache
+   namespace (real CacheIdentity), `fp8` to a different one. The pin
+   cannot move the warmed cache's namespace.
 """
 from __future__ import annotations
 import os
@@ -288,12 +291,71 @@ def test_kv_cache_dtype_pin_and_identity(stub_env):
         "the identity hash must change with the dtype (each dtype -> its own "
         f"namespace): bf16={ns_bf16} fp16={ns_fp16} fp32={ns_fp32}")
 
-    # (c) the auto -> bfloat16 resolution contract (what makes the pin safe):
-    # the kv launcher resolves auto to the model dtype (bfloat16 for MiMo), so
-    # an auto recipe run and the pinned bfloat16 delegation share the
-    # namespace. Assert the documented resolution in the source.
-    kv_launcher = (KV_REPO / "scripts" / "run-vllm-with-persist.sh").read_text()
-    assert "resolves `auto` the same way" in kv_launcher or \
-           'resolves "auto" the same way' in kv_launcher or \
-           "resolves `auto`" in kv_launcher, (
-        "the auto->model-dtype resolution must be documented in the kv launcher")
+    # (c) BEHAVIOURAL (review: a comment check is weak). Run the REAL
+    # resolution block (kvpersist.cli resolve_effective_identity) against a
+    # fake config.json with torch_dtype: bfloat16. `auto` and the pinned
+    # `bfloat16` must resolve to the SAME value -- and produce the SAME
+    # namespace via the real CacheIdentity. This is the substance of "the pin
+    # cannot move the warmed cache's namespace": auto resolves to the model
+    # dtype BEFORE hashing, so the pin is a no-op for a bf16 model.
+    import json as _json
+    import tempfile as _tf
+
+    def resolve_dtype(env_dtype: str) -> tuple:
+        """Return (resolved_kv_dtype, namespace) for the given KV_CACHE_DTYPE
+        env value, using the REAL code path: resolve_effective_identity with a
+        fake config.json, then a real CacheIdentity built from those values."""
+        with _tf.TemporaryDirectory() as td:
+            cfg_dir = Path(td)
+            (cfg_dir / "config.json").write_text(_json.dumps(
+                {"torch_dtype": "bfloat16", "dtype": "float32"}))
+            script = (
+                "import sys, json, hashlib; "
+                f"sys.path.insert(0, r'{KV_REPO / 'implementation'}'); "
+                "import os; "
+                f"os.environ['KV_CACHE_DTYPE'] = {env_dtype!r}; "
+                "os.environ.pop('KVP_KV_CACHE_DTYPE', None); "
+                "from kvpersist.cli import resolve_effective_identity; "
+                f"eff = resolve_effective_identity(r'{cfg_dir}'); "
+                "from kvpersist.identity import CacheIdentity; "
+                "i = CacheIdentity("
+                "model_id='m', model_revision='a'*40, "
+                "tokenizer_name='t', tokenizer_revision='b'*40, "
+                "kv_cache_dtype=eff['KVP_KV_CACHE_DTYPE'], "
+                "block_size=16, num_kv_heads=8, head_dim=192, tp_size=4, "
+                "connector='LMCacheMPConnector', connector_version='0.5.6', "
+                "max_model_len=1024, chat_template_digest='c'*64, "
+                "l2_serde='zstd'); "
+                "print(eff['KVP_KV_CACHE_DTYPE']); "
+                "print(hashlib.sha256(json.dumps(i.canonical(), sort_keys=True)"
+                ".encode()).hexdigest()[:16])"
+            )
+            r = subprocess.run(["python3", "-c", script],
+                               capture_output=True, text=True, timeout=60)
+            assert r.returncode == 0, (
+                f"resolve_effective_identity failed for {env_dtype!r}: "
+                f"{r.stderr[-500:]}")
+            lines = [ln for ln in r.stdout.strip().splitlines() if ln]
+            assert len(lines) == 2, (env_dtype, r.stdout, r.stderr)
+            return lines[0], lines[1]
+
+    resolved_auto, ns_auto = resolve_dtype("auto")
+    resolved_pin, ns_pin = resolve_dtype("bfloat16")
+    resolved_fp8, ns_fp8 = resolve_dtype("fp8")
+    # torch_dtype beats dtype (bfloat16, not the dtype-key float32)
+    assert resolved_auto == "bfloat16", (
+        f"`auto` must resolve to the model's torch_dtype bfloat16, "
+        f"got {resolved_auto!r} (the config.json sets both torch_dtype and "
+        f"dtype -- torch_dtype wins)")
+    # the SUBSTITUTION: auto and the pin resolve to the SAME value...
+    assert resolved_pin == resolved_auto == "bfloat16", (
+        f"the pinned bfloat16 must resolve to the same value as auto: "
+        f"{resolved_pin!r} vs {resolved_auto!r}")
+    # ...and therefore the SAME namespace (the warmed cache is NOT moved)
+    assert ns_pin == ns_auto, (
+        f"the pin must not move the warmed cache's namespace: "
+        f"auto={ns_auto} bfloat16={ns_pin}")
+    # while a genuinely different dtype lands in its own namespace
+    assert ns_fp8 != ns_auto, (
+        f"fp8 must land in a DIFFERENT namespace than bfloat16: "
+        f"{ns_fp8} vs {ns_auto}")

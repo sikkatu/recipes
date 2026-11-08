@@ -11,6 +11,7 @@ Skips (not fails) when the sibling repo checkout is unavailable.
 """
 from __future__ import annotations
 import os
+import re
 import stat
 import subprocess
 from pathlib import Path
@@ -156,3 +157,192 @@ def test_kv_launcher_matches_the_recipe_docker_run(stub_env, tmp_path):
     for var in ("HOTSPLIT_DYNAMIC=", "HOTSPLIT_NUMA=", "HOTSPLIT_BOOT_HOOK=",
                 "HOTSPLIT_COUNTS=", "HOTSPLIT_HOST_FLOOR_GIB="):
         assert var in k, f"KV docker run is missing {var} (the shared module must provide it)"
+
+
+# --- Round 72 (review step-2 item 5): FULL docker-run parity with the
+# persistent connector attached on BOTH sides. The reviewer measured the
+# permitted differences by hand; they are pinned here as an EXPLICIT
+# allowlist, so any UNEXPECTED drift (a flag silently dropped on one side)
+# fails the test.
+
+# Tokens that legitimately exist on ONE side only. Each entry is a decision:
+ALLOWED_ONLY_IN_RECIPE = {
+    # ONE container-name source: each path names its own engine.
+    "mimo-pro-tp4-hotsplit",
+    # The recipe keeps the legacy /model mount alongside the namespace mount
+    # (smoke tooling historically points at /model); the engine itself reads
+    # --model /models/<ns> on BOTH sides. Harmless duplicate, documented.
+    "<HOST>:/model:ro",
+    # Root mode: the recipe runs the engine as root, its HF cache lives under
+    # /root (the kv launcher's same-UID mode uses /tmp caches instead).
+    "<HOST>:/root/.cache/huggingface",
+}
+ALLOWED_ONLY_IN_KV = {
+    "mimo-pro-tp4-kvp",
+    # same-UID mode (KVP_SAME_UID=1, the kv launcher default): --user and the
+    # tmp-path caches. The recipe runs the engine as root (documented
+    # difference between the two launchers).
+    "--user",
+    "<HOST>:/tmp/hf-cache",
+    "HOTSPLIT_DYN_LOG=1",
+    "HOTSPLIT_STRICT_HOOK=0",
+    "HOTSPLIT_NUMA_STRICT=0",
+    # one shared hot-bank default (env.sh _kvp_hotsplit_hot_gib_default=30);
+    # the recipe launcher reads HOTSPLIT_HOT_GIB from the environment/tp4.env.
+    "HOTSPLIT_HOT_GIB=30",
+}
+# Flag names whose VALUE may differ (root home vs same-UID tmp caches):
+ALLOWED_VALUE_FLAGS = {
+    "HF_HOME=", "XDG_CACHE_HOME=", "TRITON_CACHE_DIR=",
+    "HOME=", "USER=", "LOGNAME=",
+}
+# Flags that consume a separate VALUE token; their values are not compared.
+VALUE_FLAGS = {"--user"}
+
+
+def _norm_tokens(line: str) -> list:
+    """Normalize machine-specific tokens, return the token list.
+    Volume mounts (host:container) are compared by their CONTAINER side -- the
+    host path is check-out/pytest specific and normalized to <HOST>."""
+    line = line.replace(str(KV_REPO) + "/live", "<LIVE>")
+    line = re.sub(r"(/tmp/[^:\s]+)(?=/|:)", "<TMP>", line)
+    out = []
+    prev_value_flag = False
+    for t in re.split(r"\s+", line.strip()):
+        if not t:
+            continue
+        if prev_value_flag:
+            prev_value_flag = False
+            continue
+        if t in VALUE_FLAGS:
+            prev_value_flag = True
+            out.append(t)
+            continue
+        if t.startswith(("/", "<")) and ":/" in t:
+            t = "<HOST>:" + t.split(":", 1)[1]
+        out.append(t)
+    return out
+
+
+def _is_value_flag(tok: str) -> bool:
+    return any(tok.startswith(f) for f in ALLOWED_VALUE_FLAGS)
+
+
+def test_full_docker_run_parity_with_persist(stub_env):
+    """Review step-2 item 5: compare the WHOLE `docker run` of both launchers
+    with the persistent connector attached (KV_PERSIST=1 / persist=true).
+    Differences outside the EXPLICIT allowlist fail the test."""
+    if KV_REPO is None:
+        pytest.skip(SKIP)
+    env, log = stub_env
+
+    def run(script, extra):
+        if log.exists():
+            log.unlink()
+        e = {**env, **extra}
+        subprocess.run(["bash", str(script)], env=e, capture_output=True,
+                       text=True, timeout=180)
+        return _docker_run_line(log)
+
+    common = {
+        "API_KEY": "secret123", "IMAGE": "x@sha256:" + "a" * 64, "ALLOW_RUN": "1",
+        "KVP_SAME_UID": "1", "KVP_SKIP_GPU_CHECK": "1",
+        "KVP_SKIP_HOTSPLIT_CHECK": "1", "KVP_SKIP_IPC_TEST": "1",
+        "RECIPE_DIR": str(RECIPE),
+        "KV_CACHE_DTYPE": "bfloat16",
+        "KVP_REPO": str(KV_REPO),
+        # ONE namespace on both sides (the parity hook): the recipe honours
+        # KV_PERSIST_NAMESPACE, the kv launcher KVP_MODEL_NAME -- the same
+        # escape hatch the delegation uses.
+        "KV_PERSIST_NAMESPACE": "parity-ns",
+        "KVP_MODEL_NAME": "parity-ns",
+    }
+    # The MANDATORY identity gate runs on both sides (pre-launch) -- it needs
+    # the REQUIRED identity pins in configs/mimo-v2.6-pro/identity.env.local.
+    # Fill them temporarily and RESTORE the operator's real file afterwards
+    # (the same contract as tests/unit/test_identity_gate.py).
+    import re as _re
+    _cfg = KV_REPO / "configs" / "mimo-v2.6-pro"
+    local = _cfg / "identity.env.local"
+    backup = local.read_text() if local.exists() else None
+    base = (_cfg / "identity.env").read_text()
+    for name, value in (("KVP_MODEL_REVISION", "0" * 40),
+                        ("KVP_TOKENIZER_REVISION", "0" * 40),
+                        ("KVP_CHAT_TEMPLATE_DIGEST", "0" * 64)):
+        base = _re.sub(r"^(" + name + r")=.*$", r"\1=" + value, base,
+                       flags=_re.M)
+    local.write_text(base)
+    # The kv launcher with the connector needs a "running" cache server: the
+    # pid check reads the pid file; a live PID satisfies it. The reachability
+    # pre-flight needs an open socket -- a listener on the configured port.
+    import socket
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.listen(5)
+    try:
+        pidfile = Path(env["LIVE_DIR"]) / "lmcache-server.pid"
+        pidfile.write_text(str(os.getpid()))
+        persist = {"KVP_CACHE_ROOT": env["LIVE_DIR"],
+                   "LMCACHE_HOST": "127.0.0.1", "LMCACHE_PORT": str(port),
+                   "KV_PERSIST_HOST": "127.0.0.1", "KV_PERSIST_PORT": str(port)}
+        recipe_line = run(RECIPE / "scripts" / "run-tp4-hotsplit.sh",
+                          {**common, **persist, "KV_PERSIST": "1"})
+        kv_line = run(KV_REPO / "scripts" / "run-vllm-with-persist.sh",
+                      {**common, **persist, "KVP_PERSIST_ENABLED": "true"})
+    finally:
+        srv.close()
+        if backup is None:
+            local.unlink(missing_ok=True)
+        else:
+            local.write_text(backup)
+    assert recipe_line, "recipe launcher (KV_PERSIST=1) did not reach docker run"
+    assert kv_line, "KV launcher (persist=true) did not reach docker run"
+
+    r_tokens = _norm_tokens(recipe_line)
+    k_tokens = _norm_tokens(kv_line)
+
+    # 1. the persist-ON contract flags must be on BOTH sides (this is the
+    #    reviewer's list: the recipe used to add --block-size and
+    #    --enable-prompt-tokens-details ONLY under KV_PERSIST=1, and the
+    #    --kv-transfer-config is what actually attaches the cache).
+    for flag in ("--kv-transfer-config", "--block-size", "--enable-prompt-tokens-details",
+                 "--cap-add IPC_LOCK", "--cap-add SYS_NICE", "--compilation-config"):
+        assert flag in recipe_line, (
+            f"recipe docker run (persist ON) is missing {flag}")
+        assert flag in kv_line, (
+            f"KV docker run (persist ON) is missing {flag} (parity broken)")
+
+    # 2. the key must never be an argv value on either side
+    for side, name in ((recipe_line, "recipe"), (kv_line, "KV")):
+        assert "secret123" not in side, f"{name}: key leaked into argv"
+        assert "VLLM_API_KEY=" not in side.split("--env-file")[0], (
+            f"{name}: key on the command line")
+
+    # 3. token-by-token comparison with the EXPLICIT allowlist
+    r_set, k_set = set(r_tokens), set(k_tokens)
+    unexpected_r = {t for t in r_set - k_set
+                    if t not in ALLOWED_ONLY_IN_RECIPE
+                    and not _is_value_flag(t)
+                    and not t.startswith(("<TMP>/", "<LIVE>"))}
+    unexpected_k = {t for t in k_set - r_set
+                    if t not in ALLOWED_ONLY_IN_KV
+                    and not _is_value_flag(t)
+                    and not t.startswith(("<TMP>/", "<LIVE>"))}
+    assert not unexpected_r, (
+        f"tokens ONLY in the recipe docker run outside the allowlist: "
+        f"{sorted(unexpected_r)}")
+    assert not unexpected_k, (
+        f"tokens ONLY in the KV docker run outside the allowlist: "
+        f"{sorted(unexpected_k)}")
+
+    # 4. the namespace mount must be the SAME on both sides (the parity hook)
+    def _model_target(tokens):
+        for i, t in enumerate(tokens):
+            if t == "--model" and i + 1 < len(tokens):
+                return tokens[i + 1]
+        return None
+    r_m, k_m = _model_target(r_tokens), _model_target(k_tokens)
+    assert r_m and k_m and r_m == k_m, (
+        f"the model mount path (namespace) must match: {r_m} vs {k_m}")
