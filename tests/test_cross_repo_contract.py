@@ -128,3 +128,60 @@ def test_hotsplit_module_shared():
         "the KV launcher must pass the caps from the shared module"
     assert "HOTSPLIT_COMPILE" in kv, \
         "the KV launcher must pass the compilation config from the shared module"
+
+def test_kvp_common_sh_copies_are_byte_identical():
+    """Round 67 (review: one shell library): kvp-common.sh is copied per
+    recipe (recipes must stay standalone), and the copies must be
+    BYTE-IDENTICAL -- otherwise a fix lands in one recipe and not another
+    (that is exactly what happened with the 12 kvp_curl copies)."""
+    import pytest
+    slugs = ("mimo-v2.6-pro-hotsplit", "deepseek-v4.1-flash-hotsplit",
+             "glm-5.3-flash-hotsplit", "glm-5.3-hotsplit")
+    blobs = {}
+    for slug in slugs:
+        f = RECIPES / "recipes" / "rtx-pro-6000" / slug / "scripts" / "kvp-common.sh"
+        if f.is_file():
+            blobs[slug] = f.read_bytes()
+    assert len(blobs) >= 2, "kvp-common.sh must exist in the recipes"
+    ref_slug, ref = next(iter(blobs.items()))
+    for slug, blob in blobs.items():
+        assert blob == ref, (
+            f"kvp-common.sh in {slug} differs from {ref_slug} -- "
+            "the shared helpers must be byte-identical across recipes")
+    # and no recipe script may carry an inline copy any more
+    for slug in slugs:
+        sdir = RECIPES / "recipes" / "rtx-pro-6000" / slug / "scripts"
+        if not sdir.is_dir():
+            continue
+        for sh in sdir.glob("*.sh"):
+            if sh.name == "kvp-common.sh":
+                continue
+            text = sh.read_text()
+            assert "kvp_curl(){" not in text, f"{sh}: inline kvp_curl copy (must source kvp-common.sh)"
+            assert "_kvp_seed_env_file(){" not in text, f"{sh}: inline parser copy"
+
+
+def test_env_sh_functions_match_kvp_common():
+    """kv-persistence's scripts/env.sh carries the same two functions -- the
+    bodies must stay semantically identical (same escape rules, same parser
+    contract). Checked by the distinctive lines that encode the semantics."""
+    import pytest
+    if not KV_REPO.is_dir():
+        pytest.skip(SKIP_REASON)
+    env_sh = _read(KV_REPO / "scripts" / "env.sh")
+    common = _read(RECIPES / "recipes" / "rtx-pro-6000" / "mimo-v2.6-pro-hotsplit"
+                   / "scripts" / "kvp-common.sh")
+    # the key-escaping contract (round 66/67): the _kvp_esc= lines must be
+    # IDENTICAL in both files (they encode the \ and " escaping)
+    def _esc_lines(text):
+        return [ln.strip() for ln in text.splitlines() if ln.strip().startswith("_kvp_esc=")]
+    esc_env = _esc_lines(env_sh)
+    esc_common = _esc_lines(common)
+    assert len(esc_env) == 2 and len(esc_common) == 2, (
+        f"escape lines missing: env={esc_env}, common={esc_common}")
+    assert esc_env == esc_common, (
+        f"escape contract drifted: env={esc_env} vs common={esc_common}")
+    # the parser contract: inline comments at " #", $HOME expansion, ident check
+    for marker in ('%% #*', "^[A-Za-z_][A-Za-z0-9_]*$", "$HOME"):
+        assert marker in env_sh, f"env.sh parser lost: {marker}"
+        assert marker in common, f"kvp-common.sh parser lost: {marker}"

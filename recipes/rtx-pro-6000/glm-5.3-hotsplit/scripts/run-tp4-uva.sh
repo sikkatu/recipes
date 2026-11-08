@@ -2,22 +2,13 @@
 # GLM-5.3 on 4x RTX PRO 6000: vLLM .28 UVA TP4 + UVA expert offload baseline (no hot/cold split).
 # AUTHORED, NOT RUN ON TARGET HARDWARE. Read ../README.md first.
 set -Eeuo pipefail
+# Round 67: ONE shared helper set (kvp_curl + tp4.env parser) -- copies are
+# kept byte-identical across recipes by tests/test_cross_repo_contract.py.
+. "$(dirname "${BASH_SOURCE[0]}")/kvp-common.sh"
 die(){ echo "ERROR: $*" >&2; exit 1; }
 # Round 65: send the API key on a stdin pipe (printf is a builtin -- the key is
 # never visible in `ps` and no key file is needed). Without a key the request
 # goes out unauthenticated (the documented ALLOW_NO_AUTH loopback mode).
-kvp_curl(){
-  if [ -n "${API_KEY:-}" ]; then
-    # Round 66 (review): a curl config file parses " ..." quoted values --
-    # an unescaped " or \ inside the key was silently mangled (abc"def -> abc).
-    # Escape both so ANY key bytes reach the server intact.
-    _kvp_esc="${API_KEY//\\/\\\\}"
-    _kvp_esc="${_kvp_esc//\"/\\\"}"
-    printf 'header = "Authorization: Bearer %s"\n' "$_kvp_esc" | curl -K - "$@"
-  else
-    curl "$@"
-  fi
-}
 
 # --- security contract (SECURITY.md): no wide bind, no disabled auth -----------------------------
 # BIND is where the SERVER listens (host networking: -p would be a no-op, so the bind is the

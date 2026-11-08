@@ -140,10 +140,15 @@ def test_kv_launcher_matches_the_recipe_docker_run(stub_env, tmp_path):
 
     # The must-haves on BOTH sides (parity of the hardware-verified profile):
     for flag in ("--cap-add IPC_LOCK", "--cap-add SYS_NICE",
-                 "--compilation-config", "/w/hotsplit.py", "/w/sitecustomize.py",
-                 "/live", "--env-file"):
+                 "--compilation-config", "/w/hotsplit.py", "/w/sitecustomize.py"):
         assert flag in r, f"recipe docker run is missing {flag}"
         assert flag in k, f"KV docker run is missing {flag} (parity broken)"
+    # The review's explicit trio (round 67): the /live counters mount, the
+    # --env-file key transport and NO key in argv.
+    assert ":/live" in r and ":/live" in k, "the /live counters mount must exist on BOTH sides"
+    assert "--env-file" in r and "--env-file" in k, "the key must travel via --env-file on BOTH sides"
+    for side, name in ((r, "recipe"), (k, "KV")):
+        assert "VLLM_API_KEY=" not in side, f"{name}: the key must never be an argv value"
     # The key must NEVER be a command-line argument on either side
     assert "VLLM_API_KEY=" not in r.split("--env-file")[0], "recipe: key on the command line"
     assert "VLLM_API_KEY=" not in k.split("--env-file")[0], "KV: key on the command line"

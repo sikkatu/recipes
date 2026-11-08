@@ -3,51 +3,18 @@
 # VERIFIED on target hardware (2026-10-22): weights load, API answers, generation coherent. Read ../README.md first.
 set -Eeuo pipefail
 die(){ echo "ERROR: $*" >&2; exit 1; }
+. "$(dirname "${BASH_SOURCE[0]}")/kvp-common.sh"
 # Round 65: send the API key on a stdin pipe (printf is a builtin -- the key is
 # never visible in `ps` and no key file is needed). Without a key the request
 # goes out unauthenticated (the documented ALLOW_NO_AUTH loopback mode).
-kvp_curl(){
-  if [ -n "${API_KEY:-}" ]; then
-    # Round 66 (review): a curl config file parses " ..." quoted values --
-    # an unescaped " or \ inside the key was silently mangled (abc"def -> abc).
-    # Escape both so ANY key bytes reach the server intact.
-    _kvp_esc="${API_KEY//\\/\\\\}"
-    _kvp_esc="${_kvp_esc//\"/\\\"}"
-    printf 'header = "Authorization: Bearer %s"\n' "$_kvp_esc" | curl -K - "$@"
-  else
-    curl "$@"
-  fi
-}
 # --- seed settings from ./tp4.env (optional) ------------------------------------------------------
 # Same contract as manage.sh: values already in the environment WIN over the file -- the file
 # is applied only for names that are not already exported ("only fill values not already
 # exported"). Copy tp4.env.example to tp4.env and edit; no 'set -a' sourcing (that would lose
 # the env-priority contract). The file is read before any validation so IMAGE / MODEL_REVISION /
 # API_KEY set in it are honoured.
-_TP4_ENV="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tp4.env"
-if [ -f "$_TP4_ENV" ]; then
-  while IFS= read -r _line || [ -n "$_line" ]; do
-    case "$_line" in
-      ''|'#'*) continue ;;                 # skip blanks and comments
-    esac
-    _line="${_line#export }"               # allow 'export X=1' without gluing it into the name
-    _name="${_line%%=*}"
-    [ "$_name" = "$_line" ] && continue     # not an assignment
-    _name="$(printf '%s' "$_name" | tr -d ' ')"
-    [ -z "$_name" ] && continue
-    if [ -z "${!_name:-}" ]; then           # only fill values not already exported
-      _val="${_line#*=}"
-      _val="${_val%% #*}"                   # strip inline comment: everything after " # "
-      _val="${_val%"${_val##*[![:space:]]}"}"   # strip trailing whitespace
-      _val="${_val//\"/}"                  # strip surrounding double quotes if any
-      case "$_val" in
-        *'$HOME'*|*'${HOME}'*) _val="${_val//\$HOME/$HOME}"; _val="${_val//\$\{HOME\}/$HOME}" ;;
-      esac
-      export "$_name=$_val"
-    fi
-  done < "$_TP4_ENV"
-  echo "settings seeded from $_TP4_ENV (exported environment still wins)"
-fi
+# tp4.env seeding is now _kvp_seed_env_file from kvp-common.sh (round 67).
+_kvp_seed_env_file "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tp4.env"
 
 # --- security contract (SECURITY.md): no wide bind, no disabled auth -----------------------------
 # BIND is where the SERVER listens (host networking: -p would be a no-op, so the bind is the
