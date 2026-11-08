@@ -133,7 +133,14 @@ def test_activation_skip_switch_works(stub_env):
 
 
 def _norm(line: str) -> str:
-    """Strip the tmp_path tokens (they differ per run) from the docker run."""
+    """Normalize the docker run line for contract comparison:
+    * the repo checkout root (RECIPES) -> <RECIPE_REPO> (round 69 review:
+      the fixture used to bake /home/review/recipes/... and failed in every
+      other checkout and in CI);
+    * the pytest tmp_path -> <TMP>.
+    Anything NOT covered here (e.g. --kv-cache-dtype) must stay VISIBLE --
+    the delegation comparison relies on seeing real differences."""
+    line = line.replace(str(RECIPES), "<RECIPE_REPO>")
     return re.sub(r"/tmp/pytest-of-[^/]+/pytest-\d+/[a-z0-9_]+", "<TMP>", line)
 
 
