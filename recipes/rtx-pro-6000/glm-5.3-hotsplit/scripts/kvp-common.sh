@@ -49,6 +49,7 @@ _kvp_seed_env_file(){
     if [ -z "${!_kvp_name:-}" ]; then
       _kvp_val="${_kvp_line#*=}"
       _kvp_val="${_kvp_val%% #*}"                       # inline comment at " #"
+      _kvp_val="${_kvp_val#"${_kvp_val%%[![:space:]]*}"}"  # leading whitespace
       _kvp_val="${_kvp_val%"${_kvp_val##*[![:space:]]}"}"  # trailing whitespace
       _kvp_val="${_kvp_val//\"/}"                       # surrounding double quotes
       case "$_kvp_val" in
