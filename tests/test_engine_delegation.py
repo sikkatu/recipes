@@ -312,6 +312,25 @@ def test_env_api_key_replaces_the_canonical_key_file(stub_env):
         f"live/api_key must mirror the canonical key: {live_val!r} vs {canon!r}")
 
 
+def test_recovery_script_follows_the_recorded_container(stub_env):
+    """Round 78 follow-up (user finding on hardware): test-recovery.sh
+    hardcoded mimo-pro-tp4-kvp and aborted with "container ... is 'exited'"
+    while the ACTUAL engine (mimo-pro-tp4-hotsplit) was running fine. Every
+    script that talks to the engine must resolve the name the same way as
+    stop-engine.sh: explicit CONTAINER= > live/engine_container > default."""
+    if KV_REPO is None:
+        pytest.skip(SKIP)
+    t = (KV_REPO / "scripts" / "test-recovery.sh").read_text()
+    assert "engine_container" in t, (
+        "test-recovery.sh must read live/engine_container (ONE container-name source)")
+    idx = t.index('CONTAINER="${CONTAINER:-mimo-pro-tp4-kvp}"')
+    rec_idx = t.index("live/engine_container")
+    assert rec_idx < idx, (
+        "the record must be consulted BEFORE falling back to the default")
+    assert 'export CONTAINER' in t, (
+        "the inline Python diagnostics read CONTAINER from the environment")
+
+
 def test_stop_engine_reads_the_recorded_container(stub_env):
     """Checklist 3: stop-engine.sh (kvp down / stop-all.sh) stops the
     container that was ACTUALLY started -- the one recorded by start-all."""
