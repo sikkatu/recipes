@@ -108,6 +108,11 @@ def stub_env(tmp_path):
     env["WAIT_TRIES"] = "1"
     env["WAIT_SLEEP"] = "0"
     env["KVP_SKIP_HOTSPLIT_CHECK"] = "1"
+    # Round 77: the delegated branch now runs the shared pre-flights (mp_ping +
+    # CUDA IPC test) BEFORE docker run -- they need real hardware (GPU, lmcache
+    # venv). These tests assert the DELEGATION wiring, so opt out exactly like
+    # the hotsplit check above.
+    env["KVP_SKIP_IPC_TEST"] = "1"
     # A FAKE kv-persistence checkout with a stub identity gate -- the same
     # device as test_kv_persist_behaviour (round 34). The mandatory gate needs
     # a real identity (hardware/setup territory); the DELEGATION wiring is
