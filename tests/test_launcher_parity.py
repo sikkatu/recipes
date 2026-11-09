@@ -326,14 +326,28 @@ def test_full_docker_run_parity_with_persist(stub_env):
         assert "VLLM_API_KEY=" not in side.split("--env-file")[0], (
             f"{name}: key on the command line")
 
-    # 3. token-by-token comparison with the EXPLICIT allowlist
-    r_set, k_set = set(r_tokens), set(k_tokens)
-    unexpected_r = {t for t in r_set - k_set
+    # 3. MULTISET comparison (round 78: set() lost duplicate flags/mounts
+    #    and ordering). Counter tracks multiplicity: if one side has --foo
+    #    twice and the other once, the difference is visible. We also detect
+    #    unexpected DUPLICATE flags (a flag appearing more than once outside
+    #    the documented multi-use flags like --cap-add or -v).
+    from collections import Counter
+    MULTI_USE_FLAGS = {"--cap-add", "-v", "--mount", "-e", "--env-file",
+                       "--gpus", "--shm-size", "--ulimit"}
+    r_cnt, k_cnt = Counter(r_tokens), Counter(k_tokens)
+    # Tokens appearing on ONE side only (outside allowlist) = drift.
+    # MULTI-USE flag tokens are exempt here: their VALUES are compared
+    # separately (3d flag-value multiset + 3c mount order), and a flag token
+    # like '-v' legitimately appears more times on one side when a documented
+    # extra mount exists (the recipe's legacy /model).
+    unexpected_r = {t for t in (r_cnt - k_cnt)
                     if t not in ALLOWED_ONLY_IN_RECIPE
+                    and t not in MULTI_USE_FLAGS
                     and not _is_value_flag(t)
                     and not t.startswith(("<TMP>/", "<LIVE>"))}
-    unexpected_k = {t for t in k_set - r_set
+    unexpected_k = {t for t in (k_cnt - r_cnt)
                     if t not in ALLOWED_ONLY_IN_KV
+                    and t not in MULTI_USE_FLAGS
                     and not _is_value_flag(t)
                     and not t.startswith(("<TMP>/", "<LIVE>"))}
     assert not unexpected_r, (
@@ -342,6 +356,74 @@ def test_full_docker_run_parity_with_persist(stub_env):
     assert not unexpected_k, (
         f"tokens ONLY in the KV docker run outside the allowlist: "
         f"{sorted(unexpected_k)}")
+    # 3b. duplicate-flag detection: a non-multi-use flag appearing >1 time
+    #     on one side is suspicious (e.g. accidentally doubled --model).
+    for side_name, tokens in (("recipe", r_tokens), ("KV", k_tokens)):
+        cnt = Counter(tokens)
+        for flag, n in cnt.items():
+            if n > 1 and flag.startswith("--") and flag not in MULTI_USE_FLAGS:
+                # Check it is not a VALUE token after a multi-use flag
+                # (e.g. "-e HOTSPLIT_X=1" -- the value is not a flag).
+                pass  # flag tokens are --foo; values don't start with --
+                raise AssertionError(
+                    f"{side_name}: flag {flag!r} appears {n} times "
+                    f"(duplicate flags indicate a docker-run construction bug)")
+    # 3d. multi-use flag VALUES must match with multiplicity (the old set()
+    #     and a bare flag-token check would both miss a doubled -e or a
+    #     dropped mount). Values outside the documented differences fail.
+    def _flag_values(tokens, flag):
+        return [tokens[i + 1] for i, t in enumerate(tokens)
+                if t == flag and i + 1 < len(tokens)]
+    def _nv(vs):
+        out = []
+        for v in vs:
+            if v.endswith("/.engine-env"):
+                # key env-file: <LIVE>/.engine-env (kv) and <TMP>/.engine-env
+                # (recipe, LIVE_DIR under /tmp in tests) are the SAME artifact
+                v = "<ENVFILE>"
+            if ":" in v and v.startswith(("/", "<")):
+                out.append("<HOST>:" + v.split(":", 1)[1])
+            else:
+                out.append(v)
+        return out
+    for flag in ("-v", "-e", "--env-file", "--cap-add"):
+        # _is_value_flag: env values whose VALUE may legitimately differ
+        # (root HF cache vs same-UID tmp caches) -- they are compared for
+        # PRESENCE by name elsewhere, the value is an allowed difference.
+        r_vals = [v for v in _flag_values(r_tokens, flag)
+                  if v not in ALLOWED_ONLY_IN_RECIPE and not _is_value_flag(v)]
+        k_vals = [v for v in _flag_values(k_tokens, flag)
+                  if v not in ALLOWED_ONLY_IN_KV and not _is_value_flag(v)]
+        assert Counter(_nv(r_vals)) == Counter(_nv(k_vals)), (
+            f"{flag} values must match with multiplicity: "
+            f"recipe={sorted(_nv(r_vals))} KV={sorted(_nv(k_vals))}")
+
+    # 3c. mounts compared as a MULTISET of container-side targets (round 78).
+    #     The ORDER of docker-run flags is historically different between the
+    #     two launchers and semantically irrelevant to docker -- requiring
+    #     positional equality would be a false red. What matters is the SET of
+    #     mounts with multiplicity (a dropped/duplicated mount is a real
+    #     drift) and that no mount target appears twice (overlap bug).
+    def _mount_targets(tokens):
+        out = []
+        for i, t in enumerate(tokens):
+            if t == "-v" and i + 1 < len(tokens):
+                target = tokens[i + 1].split(":", 2)[1] if ":" in tokens[i + 1] else tokens[i + 1]
+                out.append(target)
+        return out
+    r_mnts, k_mnts = _mount_targets(r_tokens), _mount_targets(k_tokens)
+    # Documented mount differences (legacy /model, root vs same-UID HF cache)
+    DOC_MNTS = {"/model", "/root/.cache/huggingface", "/tmp/hf-cache"}
+    r_m = [m for m in r_mnts if m not in DOC_MNTS]
+    k_m = [m for m in k_mnts if m not in DOC_MNTS]
+    assert Counter(r_m) == Counter(k_m), (
+        f"mount targets must match with multiplicity: recipe={sorted(r_m)} "
+        f"KV={sorted(k_m)}")
+    for side_name, mnts in (("recipe", r_mnts), ("KV", k_mnts)):
+        cnt = Counter(mnts)
+        dups = [t for t, n in cnt.items() if n > 1]
+        assert not dups, (
+            f"{side_name}: mount target(s) duplicated in the docker run: {dups}")
 
     # 4. HOTSPLIT_HOT_GIB must be EQUAL on both sides (review: it was
     #    allow-listed as a permitted difference -- the default could drift).

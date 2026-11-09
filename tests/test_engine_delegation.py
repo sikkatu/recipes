@@ -226,6 +226,92 @@ def test_recipe_path_exit_code_reaches_the_caller(stub_env):
     assert "NOT VERIFIED" in out or "activation" in out, out[-800:]
 
 
+def test_recipe_path_arbitrary_exit_code_through_kvp_up(stub_env):
+    """Review round 78: the exit code must propagate through the FULL chain
+    (kvp up -> exec -> start-all.sh -> recipe launcher), not just exit 1 via
+    direct start-all.sh invocation. GATE_RC=42 makes the identity gate exit
+    42; kvp up must return 42 to the caller."""
+    if KV_REPO is None:
+        pytest.skip(SKIP)
+    env, log, _ = stub_env
+    # A stub recipe dir whose launcher exits with the ARBITRARY code -- the
+    # chain kvp up -> exec -> start-all.sh -> foreground bash must carry it
+    # verbatim (the real launcher wraps failures in `die`=exit 1, which the
+    # sibling test already covers).
+    import stat as _stat
+    # build the stub recipe inline (tmp_path is not in scope here):
+    import tempfile
+    d = Path(tempfile.mkdtemp(prefix="r78-stub-recipe-"))
+    (d / "scripts").mkdir(parents=True)
+    launcher = d / "scripts" / "run-tp4-hotsplit.sh"
+    launcher.write_text("#!/usr/bin/env bash\nexit 42\n")
+    launcher.chmod(launcher.stat().st_mode | _stat.S_IEXEC)
+    e = {**env, "STUB_DOCKER_LOGS": GOOD_MARKERS, "RECIPE_DIR": str(d),
+         "KVP_ENGINE": "recipe", "IMAGE": "x@sha256:" + "a" * 64,
+         "KVP_SKIP_HOTSPLIT_CHECK": "1",
+         "KVP_SKIP_IPC_TEST": "1",
+         "KVP_REPO": str(KV_REPO)}
+    kvp_script = KV_REPO / "scripts" / "kvp"
+    if not kvp_script.exists():
+        pytest.skip("kvp script not found in checkout")
+    if log.exists():
+        log.unlink()
+    try:
+        r = subprocess.run(["bash", str(kvp_script), "up"], env=e,
+                           capture_output=True, text=True, timeout=180)
+        assert r.returncode == 42, (
+            f"arbitrary exit code 42 must propagate through kvp up, "
+            f"got {r.returncode}\n{(r.stdout + r.stderr)[-600:]}")
+    finally:
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_container_env_override_wins_on_the_recipe_path(stub_env):
+    """Review round 78 finding 1: CONTAINER= from the environment must name
+    the launched container -- the old code overwrote it with the
+    KVP_ENGINE_CONTAINER default, so `CONTAINER=my-custom KVP_ENGINE=recipe`
+    launched and recorded the WRONG name."""
+    if KV_REPO is None:
+        pytest.skip(SKIP)
+    env, log, _ = stub_env
+    rec = KV_REPO / "live" / "engine_container"
+    rec.unlink(missing_ok=True)
+    r = _start_all(env, log, {"RECIPE_DIR": str(RECIPE), "KVP_ENGINE": "recipe",
+                   "IMAGE": "x@sha256:" + "a" * 64, "CONTAINER": "my-custom"},
+                   GOOD_MARKERS)
+    rec_val = rec.read_text().strip() if rec.exists() else ""
+    rec.unlink(missing_ok=True)
+    assert rec_val == "my-custom", (
+        f"CONTAINER= override must win and be recorded, got {rec_val!r}\n"
+        f"{(r.stdout + r.stderr)[-600:]}")
+    line = _docker_run_line(log)
+    assert line and "--name my-custom" in line, (
+        f"the docker run must carry the overridden name: {line}")
+
+
+def test_env_api_key_replaces_the_canonical_key_file(stub_env):
+    """Review round 78 finding 2: an explicit API_KEY must replace the
+    canonical key file (otherwise the running server and every tool reading
+    ~/.config/kvp/api_key see DIFFERENT keys -- a split-brain)."""
+    if KV_REPO is None:
+        pytest.skip(SKIP)
+    env, log, _ = stub_env
+    key_file = Path(env["KVP_API_KEY_FILE"])
+    key_file.write_text("oldkey-oldkey-oldkey-oldkey-xxxx\n")
+    r = _start_all(env, log, {"RECIPE_DIR": str(RECIPE), "KVP_ENGINE": "recipe",
+                   "IMAGE": "x@sha256:" + "a" * 64,
+                   "API_KEY": "newkey-newkey-newkey-newkey-xxxx"},
+                   GOOD_MARKERS)
+    canon = key_file.read_text().strip()
+    assert canon == "newkey-newkey-newkey-newkey-xxxx", (
+        f"the canonical key file must hold the env key, got {canon!r}")
+    live = Path(env["LIVE_DIR"]) / "api_key"
+    live_val = live.read_text().strip() if live.exists() else ""
+    assert live_val == canon, (
+        f"live/api_key must mirror the canonical key: {live_val!r} vs {canon!r}")
+
+
 def test_stop_engine_reads_the_recorded_container(stub_env):
     """Checklist 3: stop-engine.sh (kvp down / stop-all.sh) stops the
     container that was ACTUALLY started -- the one recorded by start-all."""

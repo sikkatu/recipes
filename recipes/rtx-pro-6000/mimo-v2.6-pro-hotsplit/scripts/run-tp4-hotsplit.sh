@@ -103,10 +103,23 @@ if [ -z "$API_KEY" ]; then
     echo "(not printed here; check-tp4-api.sh and manage.sh read it automatically)."
   fi
 fi
-if [ -n "$API_KEY" ] && [ ! -f "$KEY_FILE" ]; then
-  umask 077
-  printf '%s\n' "$API_KEY" > "$KEY_FILE"
-  chmod 600 "$KEY_FILE"
+# Round 78 (review 2): the canonical key file is the source of truth for
+# persistent tooling. An explicit API_KEY from the environment WINS for this
+# launch AND is saved to the canonical file (so the two can never diverge).
+# Without this, the old code left ~/.config/kvp/api_key pointing at the OLD
+# key while live/api_key mirrored the NEW one -- a split-brain.
+if [ -n "$API_KEY" ]; then
+  _canon=""
+  [ -f "$KEY_FILE" ] && _canon="$(head -n1 "$KEY_FILE" | tr -d '[:space:]')"
+  if [ "$_canon" != "$API_KEY" ]; then
+    if [ -n "$_canon" ]; then
+      echo "WARNING: API_KEY from the environment REPLACES the canonical key in $KEY_FILE." >&2
+      echo "         All tooling reading that file will use the new key from now on." >&2
+    fi
+    umask 077
+    printf '%s\n' "$API_KEY" > "$KEY_FILE"
+    chmod 600 "$KEY_FILE"
+  fi
 fi
 # Round 58: ALWAYS keep live/api_key in sync with the canonical key. Older
 # tooling (manage.sh, check-tp4-api.sh, quality-compare.sh, bench scripts)
