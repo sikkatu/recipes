@@ -187,9 +187,6 @@ ALLOWED_ONLY_IN_KV = {
     "HOTSPLIT_DYN_LOG=1",
     "HOTSPLIT_STRICT_HOOK=0",
     "HOTSPLIT_NUMA_STRICT=0",
-    # one shared hot-bank default (env.sh _kvp_hotsplit_hot_gib_default=30);
-    # the recipe launcher reads HOTSPLIT_HOT_GIB from the environment/tp4.env.
-    "HOTSPLIT_HOT_GIB=30",
 }
 # Flag names whose VALUE may differ (root home vs same-UID tmp caches):
 ALLOWED_VALUE_FLAGS = {
@@ -251,10 +248,19 @@ def test_full_docker_run_parity_with_persist(stub_env):
         "RECIPE_DIR": str(RECIPE),
         "KV_CACHE_DTYPE": "bfloat16",
         "KVP_REPO": str(KV_REPO),
+        # Round 73 (review): HOTSPLIT_HOT_GIB must be COMPARED on the
+        # delegated path, not allow-listed. start-all.sh exports the shared
+        # default (_kvp_hotsplit_hot_gib_default=30) to BOTH paths -- this
+        # test reproduces exactly that, so both docker runs must carry the
+        # SAME value and the equality assertion below verifies it.
+        "HOTSPLIT_HOT_GIB": "30",
         # ONE namespace on both sides (the parity hook): the recipe honours
         # KV_PERSIST_NAMESPACE, the kv launcher KVP_MODEL_NAME -- the same
         # escape hatch the delegation uses.
         "KV_PERSIST_NAMESPACE": "parity-ns",
+        # Round 73 (review security): the namespace override needs EXPLICIT
+        # consent -- the test passes it (that is what the hook is for).
+        "KVP_ALLOW_NAMESPACE_OVERRIDE": "1",
         "KVP_MODEL_NAME": "parity-ns",
     }
     # The MANDATORY identity gate runs on both sides (pre-launch) -- it needs
@@ -337,7 +343,27 @@ def test_full_docker_run_parity_with_persist(stub_env):
         f"tokens ONLY in the KV docker run outside the allowlist: "
         f"{sorted(unexpected_k)}")
 
-    # 4. the namespace mount must be the SAME on both sides (the parity hook)
+    # 4. HOTSPLIT_HOT_GIB must be EQUAL on both sides (review: it was
+    #    allow-listed as a permitted difference -- the default could drift).
+    #    The recipe launcher reads the value from the environment/tp4.env;
+    #    the kv launcher from the shared env.sh helper. With no tp4.env and
+    #    no explicit export the resolved value must match.
+    def _hotsplit_val(tokens, name):
+        for i, t in enumerate(tokens):
+            if t == "-e" and i + 1 < len(tokens) and tokens[i + 1].startswith(name + "="):
+                return tokens[i + 1].split("=", 1)[1]
+        return None
+    r_hot = _hotsplit_val(r_tokens, "HOTSPLIT_HOT_GIB")
+    k_hot = _hotsplit_val(k_tokens, "HOTSPLIT_HOT_GIB")
+    # The kv side ALWAYS passes it (the shared default); the recipe side
+    # passes it when set. Both must resolve to the SAME value -- and that
+    # value is the documented 30.
+    assert k_hot == "30", f"kv side hot budget must be the shared default 30, got {k_hot}"
+    if r_hot is not None:
+        assert r_hot == k_hot, (
+            f"HOTSPLIT_HOT_GIB must be EQUAL on both paths: recipe={r_hot} kv={k_hot}")
+
+    # 5. the namespace mount must be the SAME on both sides (the parity hook)
     def _model_target(tokens):
         for i, t in enumerate(tokens):
             if t == "--model" and i + 1 < len(tokens):

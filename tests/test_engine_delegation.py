@@ -359,3 +359,49 @@ def test_kv_cache_dtype_pin_and_identity(stub_env):
     assert ns_fp8 != ns_auto, (
         f"fp8 must land in a DIFFERENT namespace than bfloat16: "
         f"{ns_fp8} vs {ns_auto}")
+    # NEGATIVE boundary (review): when the model config declares NO dtype at
+    # all (no torch_dtype, no dtype), `auto` CANNOT resolve -- it stays
+    # `auto` and therefore hashes to a DIFFERENT namespace than the pinned
+    # bfloat16. That is a SAFE cache miss (never a wrong read), but the
+    # boundary must be described: the pin is a no-op only for a model whose
+    # config declares its dtype.
+    def resolve_dtype_noconfig(env_dtype: str) -> tuple:
+        with _tf.TemporaryDirectory() as td:
+            cfg_dir = Path(td)
+            (cfg_dir / "config.json").write_text(_json.dumps({"model_type": "mimo"}))
+            script = (
+                "import sys, json, hashlib; "
+                f"sys.path.insert(0, r'{KV_REPO / 'implementation'}'); "
+                "import os; "
+                f"os.environ['KV_CACHE_DTYPE'] = {env_dtype!r}; "
+                "os.environ.pop('KVP_KV_CACHE_DTYPE', None); "
+                "from kvpersist.cli import resolve_effective_identity; "
+                f"eff = resolve_effective_identity(r'{cfg_dir}'); "
+                "from kvpersist.identity import CacheIdentity; "
+                "i = CacheIdentity("
+                "model_id='m', model_revision='a'*40, "
+                "tokenizer_name='t', tokenizer_revision='b'*40, "
+                "kv_cache_dtype=eff['KVP_KV_CACHE_DTYPE'], "
+                "block_size=16, num_kv_heads=8, head_dim=192, tp_size=4, "
+                "connector='LMCacheMPConnector', connector_version='0.5.6', "
+                "max_model_len=1024, chat_template_digest='c'*64, "
+                "l2_serde='zstd'); "
+                "print(eff['KVP_KV_CACHE_DTYPE']); "
+                "print(hashlib.sha256(json.dumps(i.canonical(), sort_keys=True)"
+                ".encode()).hexdigest()[:16])"
+            )
+            r = subprocess.run(["python3", "-c", script],
+                               capture_output=True, text=True, timeout=60)
+            assert r.returncode == 0, r.stderr[-400:]
+            lines = [ln for ln in r.stdout.strip().splitlines() if ln]
+            assert len(lines) == 2, (env_dtype, r.stdout, r.stderr)
+            return lines[0], lines[1]
+
+    resolved_nodtype, ns_nodtype = resolve_dtype_noconfig("auto")
+    assert resolved_nodtype == "auto", (
+        f"with no dtype in config.json, `auto` must stay `auto`, "
+        f"got {resolved_nodtype!r}")
+    assert ns_nodtype != ns_pin, (
+        f"unresolved `auto` must NOT share the bfloat16 namespace "
+        f"(the pin cannot move an UNRESOLVED cache -- safe miss): "
+        f"{ns_nodtype} vs {ns_pin}")
