@@ -208,6 +208,7 @@ if [ -n "${HOTSPLIT_HOT_GIB:-}" ]; then
       ;;
   esac
 fi
+
 HOTSPLIT_ALLOW_STATIC_FALLBACK="${HOTSPLIT_ALLOW_STATIC_FALLBACK:-0}"
 HOTSPLIT_HOST_FLOOR_GIB="${HOTSPLIT_HOST_FLOOR_GIB:-128}"
 HOTSPLIT_NUMA="${HOTSPLIT_NUMA:-1}"
@@ -430,6 +431,12 @@ fi
 # The launcher values seeded above (tp4.env) flow in automatically.
 HOTSPLIT_BOOT_HOOK="$BOOT_HOOK"
 . "$HERE/hotsplit_env.sh"
+# Round 76 (review): the FULL HotSplit config validation lives in the shared
+# hotsplit_env.sh (_hotsplit_validate_config) -- the same checks the kv
+# launcher runs, plus the NUMA_MAP TP-coverage check (every GPU rank 0..TP-1
+# needs an entry). A bad value must fail on the HOST, not after the load.
+_hotsplit_validate_config "${TP_SIZE:-4}" \
+  || { echo "ERROR: HotSplit configuration is invalid -- fix the values above and rerun (nothing was started)." >&2; exit 1; }
 # Round 63 (review): the API key must NOT appear in `ps` output. Write it to
 # a chmod-600 env-file for docker --env-file and to a curl config file for the
 # bearer header; never pass it on a command line.
@@ -787,7 +794,7 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
         _hs_log="$(docker logs "$CONTAINER" 2>&1 || true)"
         _hs_fail=0
         check_marker() {
-          if printf '%s' "$_hs_log" | grep -qF "$2"; then
+          if grep -qF -- "$2" <<<"$_hs_log"; then
             echo "  [ok] $1 -- $3"
           else
             echo "  [MISSING] $1 -- $3" >&2
@@ -803,7 +810,7 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
         if [ "${HOTSPLIT_DYNAMIC:-1}" = "1" ]; then
           check_marker "dynamic hook" "step hook installed" "dynamic hot/cold mode is active"
           check_marker "live counters" "live counter:" "routing counters are collected (basis for the plan)"
-          if printf '%s' "$_hs_log" | grep -q "live snapshot failed"; then
+          if grep -q -- "live snapshot failed" <<<"$_hs_log"; then
             echo "  [ERROR] live counter snapshots are failing (is /live mounted and writable?)" >&2
             _hs_fail=1
           fi
@@ -811,11 +818,11 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
         if [ "${HOTSPLIT_NUMA:-1}" = "1" ]; then
           check_marker "numa hook" "HOOK STATUS numa_bind=ACTIVE" "NUMA binding installed (on a VM HOTSPLIT_NUMA_MAP is required)"
         fi
-        if printf '%s' "$_hs_log" | grep -q "no eligible MXFP4 MoE layers found"; then
+        if grep -q -- "no eligible MXFP4 MoE layers found" <<<"$_hs_log"; then
           echo "  [ERROR] no MoE layers were split -- the hot bank would be empty" >&2
           _hs_fail=1
         fi
-        if printf '%s' "$_hs_log" | grep -qE "commit failed|rollback ALSO failed"; then
+        if grep -qE -- "commit failed|rollback ALSO failed" <<<"$_hs_log"; then
           echo "  [ERROR] hotsplit transaction errors in the engine log" >&2
           _hs_fail=1
         fi

@@ -64,3 +64,109 @@ for _v in HOTSPLIT_DYN_STEPS HOTSPLIT_DYN_MAX_SWAPS HOTSPLIT_DYN_DECAY HOTSPLIT_
   [ -n "${!_v:-}" ] && HOTSPLIT_ENVS+=(-e "$_v=${!_v}")
 done
 unset _v
+
+
+# ---------------------------------------------------------------------------
+# _hotsplit_validate_config [TP_SIZE] -- validate the HotSplit knobs on the
+# HOST, before the 13-16 minute model load (review rounds 59-62, 76). ONE
+# copy: both launchers call this, so switching the engine path cannot lose
+# the checks. Returns 0 when the config is valid, 1 otherwise (errors are
+# printed to stderr; nothing is started by the caller in that case).
+#
+# Round 76 (review): the block used to live only in the kv launcher -- after
+# KVP_ENGINE=recipe became the planned default the recipe path would lose
+# every check. It now lives HERE and additionally verifies that
+# HOTSPLIT_NUMA_MAP covers every GPU rank 0..TP-1 (a map "0:0,1:0" on TP4
+# silently leaves GPU 2 and 3 unbound while numa_bind reports ACTIVE).
+_hotsplit_validate_config(){
+  _tp="${1:-${TP_SIZE:-4}}"
+  _hs_ok=1
+  if [ -n "${HOTSPLIT_HOT_GIB:-}" ]; then
+    case "$HOTSPLIT_HOT_GIB" in
+      *[!0-9]*|'') echo "ERROR: HOTSPLIT_HOT_GIB must be a whole number of GiB (e.g. 30), got '$HOTSPLIT_HOT_GIB'" >&2; _hs_ok=0 ;;
+    esac
+  fi
+  for _kv in HOTSPLIT_HOST_FLOOR_GIB HOTSPLIT_VRAM_RESERVE_GIB; do
+    _val="${!_kv:-}"
+    if [ -n "$_val" ] && ! printf '%s' "$_val" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
+      echo "ERROR: $_kv must be a non-negative number of GiB (e.g. 128), got '$_val'" >&2
+      _hs_ok=0
+    fi
+  done
+  for _kv in HOTSPLIT_DYN_STEPS HOTSPLIT_DYN_MAX_SWAPS HOTSPLIT_TOPK \
+             HOTSPLIT_LIVE_DECODE_MAX HOTSPLIT_DYN_MAX_PLAN_ERRORS \
+             HOTSPLIT_DYN_MAX_COMMIT_ERRORS HOTSPLIT_LIVE_SECS \
+             HOTSPLIT_MAX_TOKENS HOTSPLIT_DYN_PRIOR_TOKENS; do
+    _val="${!_kv:-}"
+    if [ -n "$_val" ]; then
+      case "$_val" in
+        *[!0-9]*|'') echo "ERROR: $_kv must be a non-negative integer, got '$_val'" >&2; _hs_ok=0 ;;
+        0)
+          case "$_kv" in
+            HOTSPLIT_MAX_TOKENS|HOTSPLIT_DYN_PRIOR_TOKENS) : ;;
+            *) echo "ERROR: $_kv must be >= 1, got 0" >&2; _hs_ok=0 ;;
+          esac ;;
+      esac
+    fi
+  done
+  if [ -n "${HOTSPLIT_DYN_MAX_SWAPS:-}" ] && [ "${HOTSPLIT_DYN_MAX_SWAPS}" -gt 1024 ] 2>/dev/null; then
+    echo "ERROR: HOTSPLIT_DYN_MAX_SWAPS must be 1..1024, got '$HOTSPLIT_DYN_MAX_SWAPS'" >&2
+    _hs_ok=0
+  fi
+  _val="${HOTSPLIT_DYN_DECAY:-}"
+  if [ -n "$_val" ]; then
+    if ! printf '%s' "$_val" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
+      echo "ERROR: HOTSPLIT_DYN_DECAY must be a number in 0..1 (e.g. 0.5), got '$_val'" >&2; _hs_ok=0
+    else
+      _ip="${_val%%.*}"
+      _fp=""; case "$_val" in *.*) _fp="${_val#*.}" ;; esac
+      _ipn=$((10#${_ip:-0}))
+      if [ "$_ipn" -gt 1 ] || { [ "$_ipn" -eq 1 ] && [ -n "$_fp" ] && [ -n "${_fp//0/}" ]; }; then
+        echo "ERROR: HOTSPLIT_DYN_DECAY must be in 0..1 (hotsplit.py range), got '$_val'" >&2; _hs_ok=0
+      fi
+    fi
+  fi
+  _val="${HOTSPLIT_DYN_MARGIN:-}"
+  if [ -n "$_val" ]; then
+    if ! printf '%s' "$_val" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
+      echo "ERROR: HOTSPLIT_DYN_MARGIN must be a number >= 1 (e.g. 1.25), got '$_val'" >&2; _hs_ok=0
+    else
+      _ip="${_val%%.*}"
+      _ipn=$((10#${_ip:-0}))
+      if [ "$_ipn" -lt 1 ]; then
+        echo "ERROR: HOTSPLIT_DYN_MARGIN must be >= 1 (hotsplit.py range), got '$_val'" >&2; _hs_ok=0
+      fi
+    fi
+  fi
+  if [ "${HOTSPLIT_NUMA:-1}" = "1" ] && [ -n "${HOTSPLIT_NUMA_MAP:-}" ]; then
+    if ! printf '%s' "$HOTSPLIT_NUMA_MAP" | grep -Eq '^[0-9]+:[0-9]+(,[0-9]+:[0-9]+)*$'; then
+      echo "ERROR: HOTSPLIT_NUMA_MAP must look like '0:0,1:0,2:1,3:1' (gpu:node pairs, comma-separated), got '$HOTSPLIT_NUMA_MAP'" >&2
+      echo "       (see tp4.env.example -- HOTSPLIT_NUMA_MAP; confirm the map with: numactl --hardware)" >&2
+      _hs_ok=0
+    else
+      # Round 76 (review): the map must COVER every GPU rank 0..TP-1.
+      # numa_bind.py map_from_env silently returns -1 for a missing GPU and
+      # the numa hook still reports ACTIVE -- a partial map looks healthy.
+      _covered=""
+      _pairs="${HOTSPLIT_NUMA_MAP//,/$'\n'}"
+      while IFS=: read -r _g _n; do
+        [ -n "$_g" ] && _covered="$_covered $_g "
+      done <<<"$_pairs"
+      for _i in $(seq 0 $((_tp - 1))); do
+        case "$_covered" in
+          *" $_i "*) : ;;
+          *)
+            echo "ERROR: HOTSPLIT_NUMA_MAP='$HOTSPLIT_NUMA_MAP' has no entry for GPU $_i (TP_SIZE=$_tp)." >&2
+            echo "       numa_bind would silently leave that rank unbound while reporting ACTIVE." >&2
+            _hs_ok=0 ;;
+        esac
+      done
+    fi
+  fi
+  if [ "$_hs_ok" = "1" ]; then
+    echo "hotsplit config OK: HOT_GIB=${HOTSPLIT_HOT_GIB:-stock} DYN_STEPS=${HOTSPLIT_DYN_STEPS:-default} NUMA=${HOTSPLIT_NUMA:-1}${HOTSPLIT_NUMA_MAP:+ map=$HOTSPLIT_NUMA_MAP}"
+    return 0
+  fi
+  echo "ERROR: HotSplit configuration is invalid -- fix the values above and rerun (nothing was started)." >&2
+  return 1
+}
