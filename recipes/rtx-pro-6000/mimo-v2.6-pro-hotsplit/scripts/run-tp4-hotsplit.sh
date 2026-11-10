@@ -283,7 +283,32 @@ for f in "$RECIPE/patches/hotsplit.py" "$RECIPE/patches/hotsplit_plan.py" "$RECI
 done
 
 MODEL_ARG="$MODEL_ID"
-MOUNTS=(-v "$HF_CACHE:/root/.cache/huggingface")
+# Round 79 (review): SAME-UID mode is the DEFAULT (KVP_SAME_UID=1; opt out
+# with KVP_SAME_UID=0). The engine container runs as $(id -u):$(id -g) -- the
+# SAME user as the cache server on the host. Without it the engine runs as
+# root while the server runs as the invoking user, and the server's
+# cuIpcOpenEventHandle fails with CUDA_ERROR_MAP_FAILED ("Failed to
+# open/create interprocess memory file / remote IPC semaphore pool" =
+# EACCES on root-owned cuda.shm.* in /dev/shm) -- the recurring
+# register_kv_caches 300 s timeout. This is the SAME contract the kv launcher
+# has had since round 45h/48 (run-vllm-with-persist.sh lines 60-75); the
+# delegated recipe path (KVP_ENGINE=recipe) lost it. Cache dirs move to
+# world-writable /tmp paths because a non-root user cannot write /root.
+KVP_SAME_UID="${KVP_SAME_UID:-1}"
+ENGINE_USER_ARGS=()
+ENGINE_CACHE_ARGS=(-e HF_HOME=/root/.cache/huggingface)
+_uid="$(id -u)"; _gid="$(id -g)"
+if [ "$KVP_SAME_UID" = "1" ]; then
+  ENGINE_USER_ARGS=(--user "$_uid:$_gid")
+  # a uid without a passwd entry breaks getpass.getuser() and ~-based caches
+  # (torch inductor, flashinfer, vllm usage stats) -- set HOME/USER/LOGNAME
+  # explicitly (same as the kv launcher, round 45j).
+  _me="$(id -un 2>/dev/null || true)"; _me="${_me:-uid$_uid}"
+  ENGINE_CACHE_ARGS=(-e HF_HOME=/tmp/hf-cache -e XDG_CACHE_HOME=/tmp/xdg-cache -e TRITON_CACHE_DIR=/tmp/triton-cache -e HOME=/tmp/engine-home -e "USER=$_me" -e "LOGNAME=$_me")
+  MOUNTS=(-v "$HF_CACHE:/tmp/hf-cache")
+else
+  MOUNTS=(-v "$HF_CACHE:/root/.cache/huggingface")
+fi
 if [ -n "$MODEL_DIR" ]; then
   [ -d "$MODEL_DIR" ] || die "MODEL_DIR not found: $MODEL_DIR"
   MODEL_ARG=/model
@@ -457,11 +482,13 @@ umask 077
 printf 'VLLM_API_KEY=%s\n' "$API_KEY" > "$LIVE_DIR/.engine-env"
 chmod 600 "$LIVE_DIR/.engine-env"
 ENVS=(
-  -e HF_HOME=/root/.cache/huggingface
   -e VLLM_USE_DEEP_GEMM=0
   -e VLLM_WEIGHT_OFFLOADING_DISABLE_PIN_MEMORY=1
   --env-file "$LIVE_DIR/.engine-env"
 )
+# Round 79: cache dirs come from ENGINE_CACHE_ARGS (same-UID /tmp paths or
+# the root-mode /root default) so ONE block owns them -- no drift.
+ENVS+=("${ENGINE_CACHE_ARGS[@]}")
 ENVS+=("${HOTSPLIT_ENVS[@]}")
 
 # --- model arguments: arrays, never re-parsed shell strings --------------------------------------
@@ -682,10 +709,17 @@ Clone https://github.com/sikkatu/kv-persistence (set KVP_REPO if non-standard).
 Without the identity gate cache reuse is REFUSED by policy."
   fi
 fi
+# Round 79: the fail-fast mark is taken BEFORE docker run -- any cache-server
+# error from the moment the engine starts is "fresh" (a registration failure
+# in the first seconds would be missed by a mark taken after the launch).
+_kvp_slog="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.log"
+_kvp_slog_before=0
+if [ -f "$_kvp_slog" ]; then _kvp_slog_before=$(wc -c < "$_kvp_slog"); fi
 docker run -d --name "$CONTAINER" --restart no \
   --gpus all --ipc host --network host \
   --ulimit memlock=-1 --ulimit stack=67108864 \
   --cap-add IPC_LOCK --cap-add SYS_NICE \
+  ${ENGINE_USER_ARGS[@]+"${ENGINE_USER_ARGS[@]}"} \
   "${ENVS[@]}" "${MOUNTS[@]}" "$IMAGE" \
   "${MODEL_ARGS[@]}" \
   --served-model-name "${SERVED_MODEL_NAME:-mimo-pro}" \
@@ -722,7 +756,27 @@ WAIT_SLEEP="${WAIT_SLEEP:-10}"   # readiness polls, 10s apart (tests override th
 echo "Waiting up to $((WAIT_TRIES * 10)) seconds for API readiness. Progress prints every ${WAIT_SLEEP}s (new log lines only):"
 LOG_SHOWN=0
 START_TS="$(date +%s)"
+# Round 79 (review): fail-fast on cache-server handler errors. The engine
+# waits 300s for register_kv_caches, but the server may have ALREADY failed
+# with 'Error handling operation' (e.g. CUDA_ERROR_MAP_FAILED) -- waiting out
+# the timeout cannot fix it. Scan only the FRESH part of the server log each
+# tick (same contract as the kv launcher, run-vllm-with-persist.sh round 45).
 for _ in $(seq 1 "$WAIT_TRIES"); do
+  # fail-fast (round 79): a fresh server-side handler error is fatal
+  if [ -f "$_kvp_slog" ]; then
+    _kvp_serr="$(tail -c "+$(( _kvp_slog_before + 1 ))" "$_kvp_slog" 2>/dev/null | grep -a -m1 'Error handling operation' || true)"
+    if [ -n "$_kvp_serr" ]; then
+      echo "" >&2
+      echo "ERROR: the cache server FAILED to handle a request (fail-fast):" >&2
+      tail -c "+$(( _kvp_slog_before + 1 ))" "$_kvp_slog" | grep -a -A20 'Error handling operation' | head -25 >&2
+      echo "" >&2
+      echo "This is the root cause -- waiting 300s cannot fix it. See the exception above." >&2
+      echo "Fix (CUDA IPC boundary): run the cache server as the SAME user as the engine" >&2
+      echo "  (KVP_SAME_UID=1 is now the default; KVP_SAME_UID=0 for root fallback)," >&2
+      echo "  or test the boundary first: bash scripts/ipc-test.sh" >&2
+      exit 1
+    fi
+  fi
   # fail fast: if the container died, waiting cannot help -- show why and stop now
   RUN_STATE="$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' "$CONTAINER" 2>/dev/null || echo gone)"
   case "$RUN_STATE" in

@@ -173,17 +173,16 @@ ALLOWED_ONLY_IN_RECIPE = {
     # (smoke tooling historically points at /model); the engine itself reads
     # --model /models/<ns> on BOTH sides. Harmless duplicate, documented.
     "<HOST>:/model:ro",
-    # Root mode: the recipe runs the engine as root, its HF cache lives under
-    # /root (the kv launcher's same-UID mode uses /tmp caches instead).
+    # Root-mode opt-out (KVP_SAME_UID=0): the HF cache lives under /root.
+    # Same-UID mode (the DEFAULT on BOTH sides since round 79) mounts it at
+    # /tmp/hf-cache instead -- that mount is shared now, not a one-side token.
     "<HOST>:/root/.cache/huggingface",
 }
 ALLOWED_ONLY_IN_KV = {
     "mimo-pro-tp4-kvp",
-    # same-UID mode (KVP_SAME_UID=1, the kv launcher default): --user and the
-    # tmp-path caches. The recipe runs the engine as root (documented
-    # difference between the two launchers).
-    "--user",
-    "<HOST>:/tmp/hf-cache",
+    # Round 79 (review): same-UID mode is the DEFAULT on BOTH launchers now --
+    # --user uid:gid and the /tmp caches appear on both sides and are compared
+    # like any shared flag (they were one-side tokens before the recipe fix).
     "HOTSPLIT_DYN_LOG=1",
     "HOTSPLIT_STRICT_HOOK=0",
     "HOTSPLIT_NUMA_STRICT=0",
