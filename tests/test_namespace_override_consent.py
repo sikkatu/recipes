@@ -122,6 +122,7 @@ def stub_env(tmp_path):
     srv.listen(5)
     env["LMCACHE_HOST"] = "127.0.0.1"
     env["LMCACHE_PORT"] = str(port)
+    env["KV_PERSIST_PORT"] = env["LMCACHE_PORT"]  # the pre-flight probes the connector port
     # real identity pins (written + restored) so the identity-derived name can
     # be computed when the override is IGNORED
     cfg = KV_REPO / "configs" / "mimo-v2.6-pro"

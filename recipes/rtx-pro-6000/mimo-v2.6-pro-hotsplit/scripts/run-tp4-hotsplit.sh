@@ -140,13 +140,6 @@ fi
 # --- contract: image digests, always (no :latest, no floating tags) -------------------------------
 # The model patches below are built against a specific vLLM image, so the image MUST be pinned.
 IMAGE="${IMAGE:-}"
-# Round 80b (review): remember the pinned image in live/image -- the
-# zero-config auto-resolve (print-recipe-image.sh) lived ONLY in the deleted
-# kv launcher. standalone scripts (test-recovery.sh scenario B) read this.
-if [ -n "$IMAGE" ] && [ -d "${LIVE_DIR:-$HOME/kv-persistence/live}" ]; then
-  printf '%s
-' "$IMAGE" > "${LIVE_DIR:-$HOME/kv-persistence/live}/image" 2>/dev/null || true
-fi
 case "$IMAGE" in
   *@sha256:*)
     # the digest must be exactly 64 hex chars; a malformed one silently resolves to a
@@ -161,6 +154,33 @@ reproducible and the mounted model patches only match one vLLM build. Get the di
   docker buildx imagetools inspect <repo>:<tag> | grep Digest
 then run: IMAGE=<repo>:<tag>@sha256:<digest> $0" ;;
 esac
+# Round 80 review (diagnostics parity): a DIRECT run-tp4-hotsplit.sh (the
+# README documents it as the alternative to start-all.sh) must run the SAME
+# pre-flights the integrated path runs -- the TCP reachability, L2 codec and
+# lmcache-version checks (env.sh::_kvp_pre_flights) before the ~15-min model
+# load. Guarded by KVP_PREFLIGHTS_DONE so start-all.sh (which already ran
+# them) does not pay the probe twice.
+if [ "${KV_PERSIST:-0}" = "1" ] && [ "${KVP_PREFLIGHTS_DONE:-0}" != "1" ]; then
+  if [ -n "${KVP_REPO:-}" ] && [ -f "$KVP_REPO/scripts/env.sh" ]; then
+    . "$KVP_REPO/scripts/env.sh"
+    echo "KV_PERSIST=1: running the shared pre-flights (TCP, codec, lmcache version)"
+    _kvp_pre_flights "$KVP_REPO" "${KV_PERSIST_HOST:-${LMCACHE_HOST:-127.0.0.1}}" "${KV_PERSIST_PORT:-${LMCACHE_PORT:-5555}}" \
+      "${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}" "$IMAGE" \
+      "$(id -u)" "$(id -g)" "${KVP_SAME_UID:-1}" "${KVP_LAUNCH_MODE:-host}" \
+      || die "pre-flight failed -- refusing the launch (nothing was started)"
+  else
+    echo "NOTE: kv-persistence checkout not found (set KVP_REPO) -- shared pre-flights skipped" >&2
+  fi
+fi
+# Round 80 review: remember the VALIDATED image in live/image -- the
+# zero-config auto-resolve (print-recipe-image.sh) lived ONLY in the deleted
+# kv launcher. Written AFTER the digest check so an invalid IMAGE never
+# lands in live/image (test-recovery.sh scenario B reads it). LIVE_DIR comes
+# from start-all.sh (exported) or the recipe's own default.
+if [ -n "$IMAGE" ]; then
+  printf '%s
+' "$IMAGE" > "$LIVE_DIR/image" 2>/dev/null || true
+fi
 
 # --- contract: model revisions are commit SHAs when the model is fetched --------------------------
 MODEL_REVISION="${MODEL_REVISION:-}"

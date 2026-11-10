@@ -131,6 +131,7 @@ def stub_env(tmp_path):
     env["KVP_CACHE_ROOT"] = str(tmp_path / "live")
     env["LMCACHE_HOST"] = "127.0.0.1"
     env["LMCACHE_PORT"] = str(_port)
+    env["KV_PERSIST_PORT"] = env["LMCACHE_PORT"]  # the pre-flight probes the connector port
     env["KV_PERSIST_HOST"] = "127.0.0.1"
     env["KV_PERSIST_PORT"] = str(_port)
     env["WAIT_TRIES"] = "1"
@@ -358,7 +359,10 @@ def test_env_api_key_replaces_the_canonical_key_file(stub_env):
     canon = key_file.read_text().strip()
     assert canon == "newkey-newkey-newkey-newkey-xxxx", (
         f"the canonical key file must hold the env key, got {canon!r}")
-    live = Path(env["LIVE_DIR"]) / "api_key"
+    # Round 80 review: start-all.sh exports ONE canonical LIVE_DIR
+    # ($ROOT/live) -- the mirror lands there regardless of the caller's PWD
+    # or an inherited LIVE_DIR (the old $PWD/live default drifted).
+    live = KV_REPO / "live" / "api_key"
     live_val = live.read_text().strip() if live.exists() else ""
     assert live_val == canon, (
         f"live/api_key must mirror the canonical key: {live_val!r} vs {canon!r}")

@@ -116,6 +116,7 @@ def stub_env(tmp_path):
     env["WAIT_SLEEP"] = "0"
     env["LMCACHE_HOST"] = "127.0.0.1"
     env["LMCACHE_PORT"] = str(srv.getsockname()[1])
+    env["KV_PERSIST_PORT"] = env["LMCACHE_PORT"]  # the pre-flight probes the connector port
     env["KV_PERSIST_HOST"] = "127.0.0.1"
     env["KV_PERSIST_PORT"] = str(srv.getsockname()[1])
     return env, log
