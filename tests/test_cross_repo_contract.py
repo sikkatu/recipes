@@ -12,6 +12,8 @@ Checked:
   - every HotSplit file the kv launcher mounts exists in the recipe
 """
 from __future__ import annotations
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _contract as _T
 from pathlib import Path
 import re
 
@@ -68,7 +70,7 @@ def test_ports_agree():
     import pytest
     if not KV_REPO.is_dir():
         pytest.skip(SKIP_REASON)
-    kv = _read(KV_REPO / "scripts" / "run-vllm-with-persist.sh")
+    kv = _T.contract_text()  # Round 80b: kv launcher deleted; read the live contract union
     m = re.search(r'LMCACHE_PORT=\$\{LMCACHE_PORT:-([0-9]+)\}', kv) or \
         re.search(r'LMCACHE_PORT:-([0-9]+)', kv)
     kv_port = m.group(1) if m else None
@@ -85,7 +87,7 @@ def test_namespace_pins_present():
     ident = _read(KV_REPO / "configs" / "mimo-v2.6-pro" / "identity.env")
     for pin in ("KVP_HEAD_DIM=", "KVP_NUM_KV_HEADS=", "KVP_KV_CACHE_DTYPE="):
         assert pin in ident, f"identity.env must pin {pin}"
-    kv = _read(KV_REPO / "scripts" / "run-vllm-with-persist.sh")
+    kv = _T.contract_text()  # Round 80b: kv launcher deleted; read the live contract union
     for var in ("MAX_MODEL_LEN", "MAX_NUM_SEQS"):
         assert var in kv, f"engine launcher must honour {var} from tp4.env"
 
@@ -93,7 +95,7 @@ def test_hotsplit_files_mounted_by_kv_launcher_exist():
     import pytest
     if not KV_REPO.is_dir():
         pytest.skip(SKIP_REASON)
-    kv = _read(KV_REPO / "scripts" / "run-vllm-with-persist.sh")
+    kv = _T.contract_text()  # Round 80b: kv launcher deleted; read the live contract union
     needed = re.findall(r'patches/([A-Za-z0-9_.]+\.py)', kv)
     needed += re.findall(r'patches/(expert_hist_mix\.json)', kv)
     assert needed, "kv launcher must mount the recipe hotsplit machinery"
@@ -121,7 +123,7 @@ def test_hotsplit_module_shared():
         assert "hotsplit_env.sh" in t, f"{launcher.name} must source the shared module"
     if not KV_REPO.is_dir():
         pytest.skip(SKIP_REASON)
-    kv = _read(KV_REPO / "scripts" / "run-vllm-with-persist.sh")
+    kv = _T.contract_text()  # Round 80b: kv launcher deleted; read the live contract union
     assert "hotsplit_env.sh" in kv, "the KV launcher must source the shared module"
     # The caps and compile arg must be wired into the docker run
     assert "HOTSPLIT_CAP_ARGS" in kv or "HOTSPLIT_DOCKER_CAPS" in kv, \

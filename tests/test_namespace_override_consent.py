@@ -16,6 +16,8 @@ socket for the reachability pre-flight, real identity pins written and
 restored).
 """
 from __future__ import annotations
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _contract as _T
 import os
 import re
 import socket
@@ -35,7 +37,7 @@ KV_REPO = next(
     None,
 )
 SKIP = "kv-persistence checkout not found (consent test needs the kv launcher)"
-LAUNCHER = KV_REPO / "scripts" / "run-vllm-with-persist.sh" if KV_REPO else None
+LAUNCHER = _T.recipe_launcher()  # Round 80b: the recipe owns the engine launch
 
 GOOD_MARKERS = """HOOK STATUS boot_hook=INACTIVE
 hotsplit dynamic: step hook installed on GPUModelRunnerImpl (update every 2000 steps, <=2 swaps/layer, margin 1.25)
@@ -112,6 +114,7 @@ def stub_env(tmp_path):
     env["KVP_REPO"] = str(KV_REPO)
     # a "running" cache server + a listening socket for the pre-flight
     (live / "lmcache-server.pid").write_text(str(os.getpid()))
+    env["KVP_SKIP_GPU_CHECK"] = "1"
     srv = socket.socket()
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("127.0.0.1", 0))
@@ -162,7 +165,7 @@ def test_override_without_consent_is_ignored(stub_env):
         pytest.skip(SKIP)
     env, log = stub_env
     r = _launch(env, log, {"IMAGE": "x@sha256:" + "a" * 64, "ALLOW_RUN": "1",
-                           "KVP_PERSIST_ENABLED": "true",
+                           "KV_PERSIST": "1",  # Round 80b: the recipe flag (KVP_PERSIST_ENABLED was kv-only)
                            "KVP_MODEL_NAME": "foreign-ns"})
     out = r.stdout + r.stderr
     assert "WARNING" in out and "IGNORED" in out, (
@@ -181,7 +184,7 @@ def test_override_with_consent_applies(stub_env):
         pytest.skip(SKIP)
     env, log = stub_env
     r = _launch(env, log, {"IMAGE": "x@sha256:" + "a" * 64, "ALLOW_RUN": "1",
-                           "KVP_PERSIST_ENABLED": "true",
+                           "KV_PERSIST": "1",  # Round 80b: the recipe flag (KVP_PERSIST_ENABLED was kv-only)
                            "KVP_ALLOW_NAMESPACE_OVERRIDE": "1",
                            "KVP_MODEL_NAME": "parity-ns"})
     out = r.stdout + r.stderr

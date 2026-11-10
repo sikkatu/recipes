@@ -145,6 +145,15 @@ def _install_stubs(tmp_path: Path):
     # these tests assert identity/override behaviour, not hotsplit
     # activation (their docker stub logs no markers) -- documented opt-out
     env["KVP_SKIP_HOTSPLIT_CHECK"] = "1"
+    # Round 80b: the recipe launcher now runs the kv-safety checks preserved
+    # from the deleted kv launcher. Give it a LIVE cache-server pid (the
+    # launch requires the server up with KV_PERSIST=1) and skip the GPU
+    # pre-flight (no real GPUs in the sandbox -- stub docker only).
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir(exist_ok=True)
+    (cache_root / "lmcache-server.pid").write_text(str(os.getpid()))
+    env["KVP_CACHE_ROOT"] = str(cache_root)
+    env["KVP_SKIP_GPU_CHECK"] = "1"
     env["WAIT_SLEEP"] = "0"
     return env, log, cli_env_log
 

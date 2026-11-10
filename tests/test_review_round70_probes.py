@@ -1,3 +1,5 @@
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _contract as _T
 """Review round 70: three delegation defects as FAILING regression tests.
 Drop into recipes/tests/ (reuses the fixtures of test_engine_delegation.py).
 Each test fails on commit 09a2654 (kv) / 8553763 (recipes) and must pass after the fix.
@@ -29,7 +31,7 @@ def test_A_delegated_launch_has_the_same_hot_bank_as_the_kv_path(stub_env):
     recipe_env = _hotsplit_env(_docker_run_line(log))
     out = r.stdout + r.stderr
     REC.unlink(missing_ok=True)
-    _start_all(env, log, {**X, "KVP_PERSIST_ENABLED": "false"}, GOOD_MARKERS)
+    _start_all(env, log, {**X, "KVP_ENGINE": "recipe"}, GOOD_MARKERS)  # Round 80b: one engine path
     kv_env = _hotsplit_env(_docker_run_line(log))
     assert "split is a no-op" not in out, "recipe launcher warned: hot bank would be EMPTY"
     assert recipe_env.get("HOTSPLIT_HOT_GIB") == kv_env.get("HOTSPLIT_HOT_GIB") == "30", (recipe_env, kv_env)
@@ -41,7 +43,7 @@ def test_B_stop_engine_stops_what_the_default_path_started(stub_env):
     env, log, _ = stub_env
     REC.unlink(missing_ok=True)
     _start_all(env, log, {**X, "KVP_ENGINE": "recipe"}, GOOD_MARKERS)
-    _start_all(env, log, {**X, "KVP_PERSIST_ENABLED": "false"}, GOOD_MARKERS)
+    _start_all(env, log, {**X, "KVP_ENGINE": "recipe"}, GOOD_MARKERS)  # Round 80b: one engine path
     started = _name(_docker_run_line(log))
     log.unlink(missing_ok=True)
     subprocess.run(["bash", str(KV_REPO / "scripts" / "stop-engine.sh")], env=env,

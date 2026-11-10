@@ -140,6 +140,13 @@ fi
 # --- contract: image digests, always (no :latest, no floating tags) -------------------------------
 # The model patches below are built against a specific vLLM image, so the image MUST be pinned.
 IMAGE="${IMAGE:-}"
+# Round 80b (review): remember the pinned image in live/image -- the
+# zero-config auto-resolve (print-recipe-image.sh) lived ONLY in the deleted
+# kv launcher. standalone scripts (test-recovery.sh scenario B) read this.
+if [ -n "$IMAGE" ] && [ -d "${LIVE_DIR:-$HOME/kv-persistence/live}" ]; then
+  printf '%s
+' "$IMAGE" > "${LIVE_DIR:-$HOME/kv-persistence/live}/image" 2>/dev/null || true
+fi
 case "$IMAGE" in
   *@sha256:*)
     # the digest must be exactly 64 hex chars; a malformed one silently resolves to a
@@ -626,6 +633,27 @@ PYEFF
   echo "KV_PERSIST=1: engine args synced with the effective identity (served-model-name=$SERVED_MODEL_NAME kv=$KV_CACHE_DTYPE max-len=$MAX_MODEL_LEN block=$KV_PERSIST_BLOCK_SIZE tp=$TP_SIZE)"
 
   # --- cache-identity namespace (identical purpose to kv-persistence round 13)
+  # Round 80b (review): an EXPLICIT namespace override requires CONSENT --
+  # the round-72 security contract, preserved from the deleted kv launcher.
+  # A stray KV_PERSIST_NAMESPACE / legacy KVP_MODEL_NAME silently redirects
+  # the cache namespace (and would collide with another deployment's data);
+  # it must be deliberate (KVP_ALLOW_NAMESPACE_OVERRIDE=1) and print a loud
+  # WARNING, exactly like the old kv launcher did.
+  # KV_PERSIST_NAMESPACE is the recipe's OWN explicit knob -- used verbatim.
+  # The consent gate is for the legacy KVP_MODEL_NAME only (round 72 contract:
+  # an inherited KVP_MODEL_NAME is a silent namespace redirect and must be
+  # deliberate). Round 80b: preserved from the deleted kv launcher.
+  if [ -n "${KVP_MODEL_NAME:-}" ]; then
+    if [ "${KVP_ALLOW_NAMESPACE_OVERRIDE:-0}" != "1" ]; then
+      echo "WARNING: KVP_MODEL_NAME is set but KVP_ALLOW_NAMESPACE_OVERRIDE=1 is missing -- IGNORED." >&2
+      echo "         an inherited name would silently redirect the cache namespace." >&2
+      echo "         consent explicitly: KVP_ALLOW_NAMESPACE_OVERRIDE=1 KVP_MODEL_NAME=<ns> bash $0" >&2
+      unset KVP_MODEL_NAME
+    else
+      echo "WARNING: cache namespace OVERRIDDEN by consent (KVP_ALLOW_NAMESPACE_OVERRIDE=1): $KVP_MODEL_NAME" >&2
+      KV_PERSIST_NAMESPACE="${KV_PERSIST_NAMESPACE:-$KVP_MODEL_NAME}"
+    fi
+  fi
   KV_PERSIST_NAMESPACE="${KV_PERSIST_NAMESPACE:-}"
   if [ -z "$KV_PERSIST_NAMESPACE" ]; then
     if [ -n "$MODEL_DIR" ] && [ -f "$KVP_REPO/implementation/kvpersist/cli.py" ]; then
@@ -677,6 +705,25 @@ accept that remote-fetch deployments of the same HF id share cache blocks."
   KV_TRANSFER_CONFIG="{\"kv_connector\":\"LMCacheMPConnector\",\"kv_connector_module_path\":\"lmcache.integration.vllm.lmcache_mp_connector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"lmcache.mp.host\":\"tcp://$KV_PERSIST_HOST\",\"lmcache.mp.port\":\"$KV_PERSIST_PORT\"}}"
   echo "KV_PERSIST=1: attaching LMCache connector at $KV_PERSIST_HOST:$KV_PERSIST_PORT (wiki: kv-persistence)"
   echo "KV_PERSIST=1: cache-identity namespace -> ${MODEL_MOUNT:-$MODEL_ARG} (incompatible deployments get a safe cache miss)"
+  # Round 80b (review): persist the EFFECTIVE codec + namespace next to the
+  # cache -- this file-writing lived ONLY in the deleted kv launcher
+  # (round 46) and vanished with it, while verify-engine-identity.sh still
+  # READS it. Without it a plain `bash scripts/verify-engine-identity.sh` in
+  # a fresh terminal reports l2_serde identity=none != engine=zstd and refuses
+  # cache reuse. Regenerated on every launch.
+  _eid_root="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}"
+  if [ -w "$_eid_root" ]; then
+    {
+      echo "# Written by run-tp4-hotsplit.sh at engine launch (round 80b)."
+      echo "# The EFFECTIVE cache identity of the running engine."
+      echo "# Standalone scripts (verify-engine-identity.sh, test-recovery.sh,"
+      echo "# benchmark.sh) read this file when neither USE_LOSSLESS_SERDE nor"
+      echo "# the KVP_L2_SERDE identity pin is set. Regenerated on every launch."
+      echo "KVP_L2_SERDE=${LMCACHE_L2_SERDE:-none}"
+      echo "KVP_MODEL_NAME=${KV_PERSIST_NAMESPACE:-$KVP_MODEL_NAME}"
+    } > "$_eid_root/engine-identity.env"
+    echo "KV_PERSIST=1: engine identity written: $_eid_root/engine-identity.env (KVP_L2_SERDE=${LMCACHE_L2_SERDE:-none})"
+  fi
   MODEL_ARGS+=(--kv-transfer-config "$KV_TRANSFER_CONFIG")
   # cached_tokens (usage.prompt_tokens_details) is the ONLY machine-readable
   # reuse counter -- without this flag the kv-persistence acceptance run
@@ -715,6 +762,21 @@ fi
 _kvp_slog="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.log"
 _kvp_slog_before=0
 if [ -f "$_kvp_slog" ]; then _kvp_slog_before=$(wc -c < "$_kvp_slog"); fi
+# Round 80b (review): kv-safety checks preserved from the deleted kv launcher.
+# (a) GPU memory must be free BEFORE the engine starts (a leaked process would
+#     block the new engine after ~15 min of model loading).
+if [ "${KVP_SKIP_GPU_CHECK:-0}" != "1" ] && [ -n "${KVP_REPO:-}" ] && [ -f "$KVP_REPO/scripts/env.sh" ]; then
+  . "$KVP_REPO/scripts/env.sh"
+  _kvp_gpu_preflight 2048 || die "GPU memory is still held -- leaked processes block the new engine (see PIDs above). Fix and rerun."
+fi
+# (b) with KV_PERSIST=1 the cache server MUST be alive (a dead server wastes
+#     the model load and fails at register_kv_caches after 300s).
+if [ "${KV_PERSIST:-0}" = "1" ]; then
+  _kvp_pidf="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}/lmcache-server.pid"
+  if [ ! -f "$_kvp_pidf" ] || ! kill -0 "$(cat "$_kvp_pidf" 2>/dev/null)" 2>/dev/null; then
+    die "LMCache cache server not running -- start it first: bash $KVP_REPO/scripts/start-cache.sh"
+  fi
+fi
 docker run -d --name "$CONTAINER" --restart no \
   --gpus all --ipc host --network host \
   --ulimit memlock=-1 --ulimit stack=67108864 \
@@ -782,9 +844,41 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
   case "$RUN_STATE" in
     running*) : ;;
     *)
-      echo "ERROR: container $CONTAINER is not running ($RUN_STATE) -- the server never started." >&2
+      echo "ERROR: container $CONTAINER is not running ($RUN_STATE) -- the engine never started." >&2
       echo "Last logs:" >&2
       docker logs --tail 250 "$CONTAINER" >&2 || true
+      # Round 80b (review): the cache-server diagnostics lived ONLY in the
+      # legacy kv launcher and vanished with it -- restored here so a dead
+      # engine still points at the REAL root cause (server log first).
+      _kvp_diag="${KVP_CACHE_ROOT:-/var/lib/kv-persistence/l2}"
+      echo "" >&2
+      echo "---- cache server diagnostics (automatic) ----" >&2
+      _kvp_log="$_kvp_diag/lmcache-server.log"
+      _kvp_pidf="$_kvp_diag/lmcache-server.pid"
+      if [ -f "$_kvp_pidf" ]; then
+        _kvp_pid="$(tr -d '[:space:]' < "$_kvp_pidf")"
+        if kill -0 "$_kvp_pid" 2>/dev/null; then
+          echo "server process: ALIVE (pid $_kvp_pid)" >&2
+        else
+          echo "server process: DEAD (stale pid file, pid $_kvp_pid)" >&2
+        fi
+      else
+        echo "server process: no pid file at $_kvp_pidf" >&2
+      fi
+      if [ -f "$_kvp_log" ]; then
+        _kvp_err="$(grep -a -n 'Error handling operation' "$_kvp_log" | tail -n 1 || true)"
+        if [ -n "$_kvp_err" ]; then
+          echo "--- server ERROR (root cause) ---" >&2
+          _kvp_errline="${_kvp_err%%:*}"
+          sed -n "${_kvp_errline},$(( _kvp_errline + 25 ))p" "$_kvp_log" >&2 || true
+        else
+          echo "--- no 'Error handling operation' in the server log ---" >&2
+        fi
+        echo "--- last 30 server log lines (filtered) ---" >&2
+        grep -a -v 'skipping eviction' "$_kvp_log" | tail -n 30 >&2 || true
+      else
+        echo "server log: missing ($_kvp_log)" >&2
+      fi
       exit 1 ;;
   esac
   # progress line every poll: print only NEW log lines (a repeated identical line every

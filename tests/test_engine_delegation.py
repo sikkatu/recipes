@@ -45,6 +45,16 @@ hotsplit live counter: 69 layers -> /live/counts.json
 HOOK STATUS numa_bind=ACTIVE
 """
 
+PYTHON_STUB = '''#!/usr/bin/env bash
+# Round 80b: the delegated launch derives the namespace via
+# `python3 -m kvpersist.cli model-name` -- answer it like the real CLI
+# (a namespace derived from the KVP_* env) so the launch proceeds.
+case "$*" in
+  *kvpersist.cli*model-name*)
+    echo "mimo-pro/testhash" ;;
+esac
+exec /usr/bin/python3 "$@"
+'''
 STUB = '''#!/usr/bin/env bash
 echo "$0 $*" >> "$STUB_LOG"
 case "$(basename "$0")" in
@@ -86,6 +96,9 @@ def stub_env(tmp_path):
         p = bin_dir / name
         p.write_text(STUB)
         p.chmod(p.stat().st_mode | stat.S_IEXEC)
+    _py = bin_dir / "python3"
+    _py.write_text(PYTHON_STUB)
+    _py.chmod(_py.stat().st_mode | stat.S_IEXEC)
     for d in ("model", "home", "live"):
         (tmp_path / d).mkdir()
     home = tmp_path / "home"
@@ -96,6 +109,17 @@ def stub_env(tmp_path):
     # the cache step of start-all needs the real lmcache CLI -- a running-PID
     # stub makes it skip; these tests exercise the ENGINE step only
     (tmp_path / "live" / "lmcache-server.pid").write_text(str(os.getpid()))
+    # Round 80b: the delegated launch now runs the THREE pre-flight checks
+    # preserved from the deleted kv launcher -- including a TCP reachability
+    # probe of the cache server. A real listening socket answers it.
+    import socket as _socket
+    _srv = _socket.socket()
+    _srv.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+    _srv.bind(("127.0.0.1", 0))
+    _srv.listen(5)
+    _port = _srv.getsockname()[1]
+    import atexit
+    atexit.register(_srv.close)
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["STUB_LOG"] = str(log)
@@ -105,6 +129,10 @@ def stub_env(tmp_path):
     env["HOME"] = str(home)
     env["KVP_API_KEY_FILE"] = str(key_file)
     env["KVP_CACHE_ROOT"] = str(tmp_path / "live")
+    env["LMCACHE_HOST"] = "127.0.0.1"
+    env["LMCACHE_PORT"] = str(_port)
+    env["KV_PERSIST_HOST"] = "127.0.0.1"
+    env["KV_PERSIST_PORT"] = str(_port)
     env["WAIT_TRIES"] = "1"
     env["WAIT_SLEEP"] = "0"
     env["KVP_SKIP_HOTSPLIT_CHECK"] = "1"
@@ -179,9 +207,11 @@ def test_default_engine_is_the_recipe_launcher(stub_env):
     assert line and "--name mimo-pro-tp4-hotsplit" in line, line
 
 
-def test_legacy_kv_launcher_still_available_by_explicit_flag(stub_env):
-    """Round 80: KVP_ENGINE=kv must still work until the cleanup removes it
-    (every shared check lives in env.sh and runs on both paths)."""
+def test_legacy_kv_launcher_removal_is_honest(stub_env):
+    """Round 80b: the legacy kv launcher (run-vllm-with-persist.sh) is
+    DELETED. KVP_ENGINE=kv must fail with an HONEST, actionable error (not a
+    silent no-op or a wrong launch) naming the default recipe engine and
+    where the shared checks live."""
     if KV_REPO is None:
         pytest.skip(SKIP)
     env, log, _ = stub_env
@@ -189,10 +219,14 @@ def test_legacy_kv_launcher_still_available_by_explicit_flag(stub_env):
                               "IMAGE": "x@sha256:" + "a" * 64,
                               "KVP_PERSIST_ENABLED": "false"}, GOOD_MARKERS)
     out = r.stdout + r.stderr
-    assert r.returncode == 0, out[-800:]
-    assert "KVP_ENGINE=recipe" not in out, "the legacy path must NOT delegate"
-    line = _docker_run_line(log)
-    assert line and "--name mimo-pro-tp4-kvp" in line, line
+    assert r.returncode != 0, (
+        "KVP_ENGINE=kv must NOT silently succeed after the launcher was removed:\n" + out[-800:])
+    assert "REMOVED" in out and "run-vllm-with-persist.sh" in out, (
+        "the refusal must say the legacy launcher is REMOVED:\n" + out[-800:])
+    assert "start-all.sh" in out, (
+        "the refusal must name the default recipe launch:\n" + out[-800:])
+    assert "env.sh" in out, (
+        "the refusal must say where the shared checks live (nothing is lost):\n" + out[-800:])
 
 
 def test_recipe_path_launches_the_recipe_launcher(stub_env):
