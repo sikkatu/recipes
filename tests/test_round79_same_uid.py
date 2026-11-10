@@ -164,3 +164,21 @@ def test_fail_fast_on_server_handler_error(stub_env):
     assert "Error handling operation" in out, "the root cause must be printed"
     assert "MAP_FAILED" in out or "mapping of buffer object failed" in out, (
         "the driver-level cause must be printed")
+
+STUB_UNREGISTER_NOISE = (
+    "[2026-11-10 05:11:19,000] LMCache ERROR: Error handling operation "
+    "unregister_kv_cache (mq.py:798)\\n"
+    "zmq.error.ZMQError: Host unreachable")
+
+
+def test_benign_unregister_noise_does_not_trigger_fail_fast(stub_env):
+    """Round 79 review: the fail-fast trigger must match ONLY
+    'Error handling operation register_kv_cache'. The broad pattern also
+    matches the benign 'unregister_kv_cache' / ZMQError: Host unreachable
+    noise the server writes when an old engine dies -- a false abort after
+    the log mark."""
+    env, log = stub_env
+    r = _launch(env, log, {"STUB_SERVER_LOG_APPEND": STUB_UNREGISTER_NOISE})
+    out = r.stdout + r.stderr
+    assert "fail-fast" not in out, (
+        f"benign unregister noise must NOT trigger fail-fast: {out[-600:]}")

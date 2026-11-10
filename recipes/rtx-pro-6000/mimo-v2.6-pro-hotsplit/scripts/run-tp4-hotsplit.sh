@@ -764,11 +764,11 @@ START_TS="$(date +%s)"
 for _ in $(seq 1 "$WAIT_TRIES"); do
   # fail-fast (round 79): a fresh server-side handler error is fatal
   if [ -f "$_kvp_slog" ]; then
-    _kvp_serr="$(tail -c "+$(( _kvp_slog_before + 1 ))" "$_kvp_slog" 2>/dev/null | grep -a -m1 'Error handling operation' || true)"
+    _kvp_serr="$(tail -c "+$(( _kvp_slog_before + 1 ))" "$_kvp_slog" 2>/dev/null | grep -a -m1 'Error handling operation register_kv_cache' || true)"
     if [ -n "$_kvp_serr" ]; then
       echo "" >&2
       echo "ERROR: the cache server FAILED to handle a request (fail-fast):" >&2
-      tail -c "+$(( _kvp_slog_before + 1 ))" "$_kvp_slog" | grep -a -A20 'Error handling operation' | head -25 >&2
+      tail -c "+$(( _kvp_slog_before + 1 ))" "$_kvp_slog" | grep -a -A20 'Error handling operation register_kv_cache' | head -25 >&2
       echo "" >&2
       echo "This is the root cause -- waiting 300s cannot fix it. See the exception above." >&2
       echo "Fix (CUDA IPC boundary): run the cache server as the SAME user as the engine" >&2
