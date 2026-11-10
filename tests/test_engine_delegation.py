@@ -158,8 +158,11 @@ def _docker_run_line(log: Path):
     return None
 
 
-def test_default_engine_is_the_kv_launcher(stub_env):
-    """Checklist 1: WITHOUT the flag start-all launches the kv launcher."""
+def test_default_engine_is_the_recipe_launcher(stub_env):
+    """Round 80 (hardware validation PASSED): WITHOUT the flag start-all
+    launches the RECIPE launcher -- the hardware-verified default. The old
+    kv launcher stays only as the explicit KVP_ENGINE=kv legacy path until
+    the round-80 cleanup deletes it."""
     if KV_REPO is None:
         pytest.skip(SKIP)
     env, log, _ = stub_env
@@ -170,9 +173,24 @@ def test_default_engine_is_the_kv_launcher(stub_env):
                               "KVP_PERSIST_ENABLED": "false"}, GOOD_MARKERS)
     out = r.stdout + r.stderr
     assert r.returncode == 0, out[-800:]
-    # the kv launcher's own signals: its container name in the docker run and
-    # NO delegation banner (the recipe path prints "KVP_ENGINE=recipe:")
-    assert "KVP_ENGINE=recipe" not in out, "the default path must NOT delegate"
+    # the recipe path prints its delegation banner and names its own container
+    assert "KVP_ENGINE=recipe" in out, "the default path must delegate to the recipe"
+    line = _docker_run_line(log)
+    assert line and "--name mimo-pro-tp4-hotsplit" in line, line
+
+
+def test_legacy_kv_launcher_still_available_by_explicit_flag(stub_env):
+    """Round 80: KVP_ENGINE=kv must still work until the cleanup removes it
+    (every shared check lives in env.sh and runs on both paths)."""
+    if KV_REPO is None:
+        pytest.skip(SKIP)
+    env, log, _ = stub_env
+    r = _start_all(env, log, {"RECIPE_DIR": str(RECIPE), "KVP_ENGINE": "kv",
+                              "IMAGE": "x@sha256:" + "a" * 64,
+                              "KVP_PERSIST_ENABLED": "false"}, GOOD_MARKERS)
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out[-800:]
+    assert "KVP_ENGINE=recipe" not in out, "the legacy path must NOT delegate"
     line = _docker_run_line(log)
     assert line and "--name mimo-pro-tp4-kvp" in line, line
 
