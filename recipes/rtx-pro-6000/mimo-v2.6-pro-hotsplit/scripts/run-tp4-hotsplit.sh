@@ -160,8 +160,12 @@ esac
 # lmcache-version checks (env.sh::_kvp_pre_flights) before the ~15-min model
 # load. Guarded by KVP_PREFLIGHTS_DONE so start-all.sh (which already ran
 # them) does not pay the probe twice.
+# Round 81 (review): resolve KVP_REPO EARLY, using the same algorithm as the
+# identity gate below -- a DIRECT run without an exported KVP_REPO found
+# ~/kv-persistence too late and skipped the pre-flights entirely.
+KVP_REPO="${KVP_REPO:-${KVP_REPO_ROOT:-$HOME/kv-persistence}}"   # both spellings accepted
 if [ "${KV_PERSIST:-0}" = "1" ] && [ "${KVP_PREFLIGHTS_DONE:-0}" != "1" ]; then
-  if [ -n "${KVP_REPO:-}" ] && [ -f "$KVP_REPO/scripts/env.sh" ]; then
+  if [ -f "$KVP_REPO/scripts/env.sh" ]; then
     . "$KVP_REPO/scripts/env.sh"
     echo "KV_PERSIST=1: running the shared pre-flights (TCP, codec, lmcache version)"
     _kvp_pre_flights "$KVP_REPO" "${KV_PERSIST_HOST:-${LMCACHE_HOST:-127.0.0.1}}" "${KV_PERSIST_PORT:-${LMCACHE_PORT:-5555}}" \
@@ -562,7 +566,7 @@ fi
 KV_PERSIST="${KV_PERSIST:-0}"
 if [ "$KV_PERSIST" = "1" ]; then
   KV_PERSIST_HOST="${KV_PERSIST_HOST:-127.0.0.1}"
-  KV_PERSIST_PORT="${KV_PERSIST_PORT:-5555}"
+  KV_PERSIST_PORT="${KV_PERSIST_PORT:-${LMCACHE_PORT:-5555}}"   # round 81: SAME resolution as the pre-flight (a bare LMCACHE_PORT must reach both)
   KV_PERSIST_BLOCK_SIZE="${KV_PERSIST_BLOCK_SIZE:-16}"
   case "$KV_PERSIST_HOST:$KV_PERSIST_PORT" in
     *[^0-9a-zA-Z.\[\]:-]*) die "KV_PERSIST_HOST/PORT contain unexpected characters" ;;
