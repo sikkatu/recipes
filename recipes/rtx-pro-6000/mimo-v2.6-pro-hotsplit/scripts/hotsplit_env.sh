@@ -4,7 +4,7 @@ KVP_COMPAT_VERSION=1
 # hotsplit_env.sh -- ONE place that builds the HotSplit container env + docker args.
 #
 # Sourced by BOTH launchers (review round 59): the recipe's run-tp4-hotsplit.sh
-# and kv-persistence's run-vllm-with-persist.sh. Until now each launcher listed
+# and kv-persistence's run-vllm-with-persist.sh [deleted round 80b]. Until now each launcher listed
 # the HOTSPLIT_* variables by hand and they drifted (the KV launcher was missing
 # HOTSPLIT_NUMA_MAP / LIVE_* / DYN_* / MAX_TOKENS, --cap-add IPC_LOCK/SYS_NICE
 # and --compilation-config FULL_DECODE_ONLY -- the hardware-verified recipe

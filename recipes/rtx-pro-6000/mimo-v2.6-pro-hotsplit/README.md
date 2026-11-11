@@ -198,7 +198,7 @@ benchmarks ran on auto). Set `MAX_NUM_SEQS=1` / an explicit `KV_CACHE_DTYPE` in
    LMCache server's L2 codec), AFTER server readiness and BEFORE the first
    smoke request. Cache reuse is BLOCKED on MISMATCH (exit 4) or INCONCLUSIVE
    (exit 5): the container is stopped and the launch fails -- exactly like
-   kv-persistence's own `run-vllm-with-persist.sh`. The launcher also verifies
+   kv-persistence's legacy `run-vllm-with-persist.sh` (deleted in round 80b -- this recipe's `KV_PERSIST=1` branch is the engine path now). The launcher also verifies
    the checkout's `KVP_COMPAT_VERSION` pin and refuses to start with an
    incompatible kv-persistence version. **kv-persistence is a REQUIRED
    dependency for `KV_PERSIST=1`** (the old fallback namespace hash is

@@ -324,7 +324,7 @@ fi
 # `--model` was passed. The plain recipe mounts MODEL_DIR at /model, so EVERY
 # deployment would register the same LMCache model_name and different
 # revisions/dtypes/geometries would share one L2 namespace. kv-persistence's
-# own launcher (run-vllm-with-persist.sh) fixed this by mounting the model
+# own launcher (run-vllm-with-persist.sh [deleted round 80b]) fixed this by mounting the model
 # under a namespace-coded path derived from the verified cache identity. This
 # block applies the SAME mechanism here:
 #   1. prefer the real identity hash from a local kv-persistence checkout

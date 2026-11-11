@@ -322,7 +322,7 @@ MODEL_ARG="$MODEL_ID"
 # open/create interprocess memory file / remote IPC semaphore pool" =
 # EACCES on root-owned cuda.shm.* in /dev/shm) -- the recurring
 # register_kv_caches 300 s timeout. This is the SAME contract the kv launcher
-# has had since round 45h/48 (run-vllm-with-persist.sh lines 60-75); the
+# has had since round 45h/48 (run-vllm-with-persist.sh [deleted round 80b] lines 60-75); the
 # delegated recipe path (KVP_ENGINE=recipe) lost it. Cache dirs move to
 # world-writable /tmp paths because a non-root user cannot write /root.
 KVP_SAME_UID="${KVP_SAME_UID:-1}"

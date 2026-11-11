@@ -245,7 +245,7 @@ MiMo-V2.6-Pro 在 69 个 MoE 层中的每一层从 384 个专家中路由 8 个�
    已连接的 LMCacheMPConnector 以及**运行中的** LMCache 服务器的 L2 编解码器），在服务器
    就绪之后、首个 smoke 请求之前执行。MISMATCH（exit 4）或 INCONCLUSIVE（exit 5）时
    缓存复用被阻止：容器被停止，启动判定为失败 —— 与 kv-persistence 自带的
-   `run-vllm-with-persist.sh` 完全一致。启动器还会校验克隆的 `KVP_COMPAT_VERSION`
+   legacy `run-vllm-with-persist.sh`（已在第 80b 轮删除；现在 `KV_PERSIST=1` 的本配方就是引擎路径）完全一致。启动器还会校验克隆的 `KVP_COMPAT_VERSION`
    版本钉住，版本不兼容则拒绝启动。**kv-persistence 是 `KV_PERSIST=1` 的必需依赖**
    （旧的备用命名空间哈希已删除——有了强制门禁它不可达）。
    若手动设置 `KV_PERSIST_NAMESPACE`，隔离责任由您自行承担。
