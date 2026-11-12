@@ -145,6 +145,33 @@ the `content` fields. `temperature=0` should give identical output for short fac
 
 MiMo-V2.6-Pro routes 8 of 384 experts in each of 69 MoE layers; at ~19 MiB per expert that is ~10 GiB of expert weights per generated token across all ranks, ~2.6 GiB per rank. Every byte not served from GPU memory crosses PCIe: at a 62% hot-hit rate (measured at 31% of cells resident) that is ~1 GiB per token per rank, and at ~25 GB/s per GPU (the PCIe 4.0 link this host runs at) roughly 40 ms per token, i.e. a ceiling in the 20s of tok/s from transfer alone. A bigger hot budget lowers it; the `hotsplit plan` line printed by `HOTSPLIT_DRYRUN=1` gives the offline coverage for your exact budget.
 
+## Concurrency (MAX_NUM_SEQS)
+
+`MAX_NUM_SEQS` (default **10** since 2026-11-12; history 1 -> 2 -> 10) is the ceiling
+for concurrently COMPUTED requests in one batch -- **not a memory reservation**. Extra
+requests wait in the vLLM scheduler queue instead of failing. Set `MAX_NUM_SEQS=N` in
+`tp4.env` to raise or lower it; garbage (`0`, `-1`, `abc`) is refused before the engine
+starts.
+
+**How to read the load.** The KV pool is shared by all requests and allocated at startup,
+so `nvidia-smi` shows no memory growth as requests arrive. The real fill level is the
+engine metric `vllm:kv_cache_usage_perc` (exposed in the `kv-persistence · Inference`
+Grafana dashboard of kv-persistence) and the engine-log line `GPU KV cache size: ... tokens`.
+The SUM of all active contexts is bounded by that pool: ten very long contexts may not
+fit at once -- overflow is not an error, requests are queued or (KV pressure) preempted.
+
+**Choosing N.** Measure with `scripts/concurrency-sweep.sh` (added 2026-11-12): it drives
+N = 1..10 parallel streaming requests, checks answer correctness, and reports the "knee"
+(the N where per-stream speed drops sharply or KV fills). The Grafana dashboard shows
+what is happening live.
+
+**Honest status.** Only N <= 2 has been measured on target hardware. N = 3..10 were NOT
+measured; CUDA-graph capture at `--max-num-seqs 10` is untested (check the first launch
+log for `Capturing CUDA graphs` and errors). When a measurement exists, it is added here
+with the date. Historical note: counters include padded slots of captured batches --
+negligible at `--max-num-seqs 1`, a growing bias at higher N; compare runs at the same
+`MAX_NUM_SEQS`.
+
 ## Known limits and risks
 
 - **RESOLVED on target hardware (2026-10-22): the UVA baseline used to answer with garbage - root cause found and fixed.** A/B with identical weights and flags (`PATCH_MODEL_FILES=1` vs `0`, `HOTSPLIT_DRYRUN=1`, `MOE_BACKEND=humming`): the patched model files produce coherent text (" Paris. In the early Middle Ages, Paris was the largest city in the western world...") while the image's own `mimo_v2.py` produces training-corpus fragments ("            0     0,   0,  00 "). Root cause: the stock `load_weights` silently drops fused `qkv_proj` weight+`weight_scale_inv` pairs (they can straddle two `AutoWeightsLoader` calls and are then dropped); the patched loader keeps those pairs together. `run-tp4-uva.sh` now mounts the fixed model files by default (`PATCH_MODEL_FILES=1`). Attention backend `TRITON_ATTN_DIFFKV` and `MOE_BACKEND=humming` confirmed working; the checkpoint weights were never corrupt.
@@ -152,7 +179,10 @@ MiMo-V2.6-Pro routes 8 of 384 experts in each of 69 MoE layers; at ~19 MiB per e
 - `PATCH_MODEL_FILES=1` mounts `mimo_v2_hotsplit.py` / `mimo_v2_omni.py` over vLLM's own model files — a whole-file replacement, not a small hook, so its compatibility with the exact vLLM build is critical. The launcher therefore verifies every mounted patch against `patches/MANIFEST.sha256` before launch and refuses on any mismatch. The remaining two checks (signature/API conformance vs the target vLLM, and a GPU integration smoke test of tensor shapes / routing / output) are experiments to run on the target host before trusting the patch; both are listed in RUNNING.md.
 - `mimo_v2_hotsplit.py` is a full replacement of vLLM's `mimo_v2.py` for the pinned nightly image. Its fused-fp8-qkv sharding path (`tp_rank`) is exercised at TP4 by the fixed loader (2026-10-22). `PATCH_MODEL_FILES=0` keeps the image's own model file - that is exactly the configuration that emits training-corpus fragments (see the RESOLVED item above); use it only to reproduce the upstream bug on purpose.
 - The ranking `expert_hist_mix.json` comes from agent traffic on a previous single-GPU lane; re-rank for your traffic (`live/counts.rank0.json` + `patches/hotsplit_rerank.py`). Dynamic mode adapts within a layer's fixed slot count only; moving slots between layers needs a restart with a new ranking.
-- Counters include padded slots of captured batches (negligible at `--max-num-seqs 1`, a small bias above that).
+- Counters include padded slots of captured batches (negligible at `--max-num-seqs 1`, a
+  growing bias above that: at the 2026-11-12 default `--max-num-seqs 10` it may be
+  bigger -- NOT measured, so compare static/dynamic runs at the same `MAX_NUM_SEQS`
+  and batch shape.)
 - 4 workers pin ~hundreds of GiB of host memory at once; keep `HOTSPLIT_HOST_FLOOR_GIB` generous (launcher default 128).
 - EP is unsupported. Speculative decoding is untested here.
 - **NUMA pinning: usually inert in VMs, optional `HOTSPLIT_NUMA_MAP` for experts.** On a dual-socket host emulated by Proxmox, `nvidia-smi topo -m` shows all GPUs on `PHB` (one PCIe host bridge) with `GPU NUMA ID: N/A` — the VM does not expose which socket each GPU is physically on. `numa_bind` therefore logs `numa_node unknown; not binding` and skips pinning. This is **correct and safe**: guessing the map wrong would pin workers to the wrong socket and make things worse. DDR4 locality (which stick is on which socket) is a host-side concern — check with `numactl --hardware` and `lstopo` on the Proxmox host (not inside the VM). If you know the physical topology for sure, `HOTSPLIT_NUMA_MAP="0:0,1:0,2:1,3:1"` (gpu:node pairs) enables the binding explicitly.

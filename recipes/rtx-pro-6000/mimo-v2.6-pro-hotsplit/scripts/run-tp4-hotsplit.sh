@@ -211,7 +211,11 @@ PORT="${PORT:-30007}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-1048576}"   # 1M context by default (model max_position_embeddings=1048576)
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"        # auto = the model default (bf16 for MiMo; the VERIFIED benchmarks ran on auto); fp8 halves KV memory (use for long context)
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"   # long-context prefill (1M context default)
-MAX_NUM_SEQS="${MAX_NUM_SEQS:-2}"
+MAX_NUM_SEQS="${MAX_NUM_SEQS-${KVP_DEFAULT_MAX_NUM_SEQS:-10}}"
+# Validate AFTER seeding tp4.env (an old tp4.env can pin MAX_NUM_SEQS=2,
+# garbage never reaches --max-num-seqs) and note the old default once.
+_kvp_validate_posint MAX_NUM_SEQS || die "invalid MAX_NUM_SEQS."
+_kvp_note_old_default MAX_NUM_SEQS 2 "${KVP_DEFAULT_MAX_NUM_SEQS:-10}" "$(dirname "${BASH_SOURCE[0]}")/../tp4.env"
 CPU_OFFLOAD_GB="${CPU_OFFLOAD_GB:-128}"        # per rank; with hotsplit it only decides the initial placement
 GPU_UTIL="${GPU_UTIL:-0.85}"
 MOE_BACKEND="${MOE_BACKEND:-humming}"       # humming boots with UVA offload (verified). marlin + UVA OOMs at the repack

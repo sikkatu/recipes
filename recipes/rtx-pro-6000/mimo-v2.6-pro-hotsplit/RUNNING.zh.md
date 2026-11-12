@@ -42,6 +42,12 @@ MODEL_DIR=$HOME/models/MiMo-V2.6-Pro-MOPD scripts/run-tp4-uva.sh
 ## 测量真实效果
 更新计数不是证据。测量 TTFT/TPOT、`nvidia-smi dmon` 的 PCIe 流量，
 观察每次更新的 `hotsplit dynamic hit-rate` 行。
+Padding 说明：实时计数器包含已捕获 batch 的 padding 槽位（`--max-num-seqs 1` 时可忽略，
+2026-11-12 默认 `--max-num-seqs 10` 时偏差可能更大 —— 未测量），因此请在相同
+`MAX_NUM_SEQS` 与相同 batch 形态下比较 static/dynamic 运行。要在自己的硬件上
+测量 N = 1..10 个并行请求，请见 `scripts/concurrency-sweep.sh` 与 README 章节
+「并发（MAX_NUM_SEQS）」。
+
 
 ## 动态换入换出的竞态检查（P0-2）
 拷贝在专用 CUDA 流上执行，通过 event 发布。检查：

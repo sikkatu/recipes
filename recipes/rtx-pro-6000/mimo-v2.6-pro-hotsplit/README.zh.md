@@ -192,6 +192,29 @@ MiMo-V2.6-Pro 在 69 个 MoE 层中的每一层从 384 个专家中路由 8 个�
 即仅传输就带来 20 多 tok/s 的上限。更大的热门预算会降低它；`HOTSPLIT_DRYRUN=1` 打印的
 `hotsplit plan` 行给出你的精确预算的离线覆盖率。
 
+## 并发（MAX_NUM_SEQS）
+
+`MAX_NUM_SEQS`（2026-11-12 起默认 **10**；历史 1 -> 2 -> 10）是单个批次内同时「计算」的
+请求上限 —— **不是内存预留**。多余的请求在 vLLM 调度器中排队，而不是报错。在
+`tp4.env` 中设置 `MAX_NUM_SEQS=N` 来调高或调低；垃圾值（`0`、`-1`、`abc`）在引擎
+启动前即被拒绝。
+
+**如何看负载。** KV 池对所有请求共享、启动时一次性分配，因此 `nvidia-smi` 不会
+显示内存增长。真实占用是引擎指标 `vllm:kv_cache_usage_perc`（在 kv-persistence 的
+Grafana 面板 `kv-persistence · Inference` 中）以及日志行 `GPU KV cache size: ... tokens`。
+所有活跃上下文的总和受该池限制：十个很长的上下文可能无法同时放得下 —— 这不是错误，
+请求排队（或 KV 紧张时被挤出）。
+
+**如何选择 N.** 用 `scripts/concurrency-sweep.sh`（2026-11-12 添加）测量：它驱动
+N = 1..10 个并行 streaming 请求，校验答案正确性，并给出「拐点」（每流速度骤降
+或 KV 被塞满的 N）。Grafana 面板可实时查看。
+
+**诚实状态。** 目标硬件上只测量到 N <= 2。N = 3..10 未测量；`--max-num-seqs 10`
+下的 CUDA 图捕获未验证（首次启动请检查日志中的 `Capturing CUDA graphs` 行和错误）。
+有实测结果后会连同日期补充到这里。历史备注：计数器包含已捕获 batch 的 padding
+槽位 —— 在 `--max-num-seqs 1` 时可忽略，N 越大偏差越大；比较请在相同
+`MAX_NUM_SEQS` 下进行。
+
 ## 已知限制与风险
 
 - **已在目标硬件上解决（2026-10-22）：UVA 基线此前输出乱码 - 根因已找到并修复。** 相同权重与参数下的 A/B 测试（`PATCH_MODEL_FILES=1` 对 `0`，`HOTSPLIT_DRYRUN=1`，`MOE_BACKEND=humming`）：补丁后的模型文件生成连贯文本（" Paris. In the early Middle Ages, Paris was the largest city in the western world..."），而镜像自带的 `mimo_v2.py` 生成训练语料片段（"            0     0,   0,  00 "）。根因：原版 `load_weights` 会静默丢失 fused `qkv_proj` 的 weight+`weight_scale_inv` 对（它们可能跨越两次 `AutoWeightsLoader` 调用而被丢弃）；补丁版加载器将这些对保持在一起。`run-tp4-uva.sh` 现在默认挂载修复后的模型文件（`PATCH_MODEL_FILES=1`）。Attention backend `TRITON_ATTN_DIFFKV` 与 `MOE_BACKEND=humming` 已确认可用；检查点权重从未损坏。
@@ -207,7 +230,9 @@ MiMo-V2.6-Pro 在 69 个 MoE 层中的每一层从 384 个专家中路由 8 个�
 - 排名 `expert_hist_mix.json` 来自先前单 GPU 通道上的代理流量；请为你的流量重新排名
   （`live/counts.rank0.json` + `patches/hotsplit_rerank.py`）。动态模式仅在层的固定槽位数内
   自适应；在层间移动槽位需要用新排名重启。
-- 计数器包含捕获批次的填充槽位（在 `--max-num-seqs 1` 时可忽略，以上会略有偏差）。
+- 计数器包含捕获批次的填充槽位（`--max-num-seqs 1` 时可忽略，N 越大偏差越大：
+  2026-11-12 默认 `--max-num-seqs 10` 下偏差可能更大 -- 未测量，请在相同
+  `MAX_NUM_SEQS` 与相同 batch 形态下比较 static/dynamic。）
 - 4 个 worker 同时锁定数百 GiB 主机内存；请保持 `HOTSPLIT_HOST_FLOOR_GIB` 充足（启动脚本默认 128）。
 - 不支持 EP。此处未测试投机解码。
 - **NUMA 绑定：VM 中通常无效，`HOTSPLIT_NUMA_MAP` 是可选项。** Proxmox 模拟双路主机时，`nvidia-smi topo -m` 显示所有 GPU 走 `PHB`（同一个 PCIe host bridge），`GPU NUMA ID: N/A` —— VM 不暴露 GPU 的物理 socket 归属。因此 `numa_bind` 打印 `numa_node unknown; not binding` 并跳过绑定。这是**正确且安全的**：猜错映射会把 worker 绑到错误的 socket，反而更糟。DDR4 插槽归属是宿主机的问题 —— 在 Proxmox 宿主机（不是 VM 内）用 `numactl --hardware` 和 `lstopo` 检查。如确切知道物理拓扑，`HOTSPLIT_NUMA_MAP="0:0,1:0,2:1,3:1"`（gpu:node 配对）可显式启用绑定。

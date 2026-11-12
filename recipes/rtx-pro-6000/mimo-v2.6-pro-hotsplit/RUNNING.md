@@ -100,8 +100,11 @@ itself. To measure the actual effect, on the same workload and the same request 
    copy it inside the container (`docker cp` to `/live/expert_hist_custom.json`) and set
    `HOTSPLIT_COUNTS=/live/expert_hist_custom.json` in `tp4.env`, then restart the server.
 4. Note the live counter includes padded slots of captured batches (`live lane counts incl.
-   padded slots` in the snapshot meta). The bias is small at decode sizes but compare static
-   and dynamic runs at the same `MAX_NUM_SEQS` and batch shape to cancel it.
+   padded slots` in the snapshot meta). The bias is small at decode sizes but larger at the
+   2026-11-12 default `--max-num-seqs 10` (NOT measured) -- compare static and dynamic runs
+   at the same `MAX_NUM_SEQS` and batch shape to cancel it. To profile N = 1..10 streaming
+   requests on your hardware, see `scripts/concurrency-sweep.sh` and the README section
+   `Concurrency (MAX_NUM_SEQS)`.
 
 ## Race check for dynamic swaps (P0-2)
 The swap copies run on a dedicated CUDA stream and are published to the compute stream via a
