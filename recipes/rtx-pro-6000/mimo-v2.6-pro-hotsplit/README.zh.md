@@ -249,8 +249,8 @@ N = 1..10 个并行 streaming 请求，校验答案正确性，并给出「拐�
 对于超长聊天历史（10 万+ token），已计算的 KV 块可以在 vLLM 重启后保留——通过外部缓存服务
 （[kv-persistence](https://github.com/sikkatu/kv-persistence)）。配方中带有**可选**集成，
 默认关闭——不设置 `KV_PERSIST` 时不挂载缓存连接器、不做命名空间重挂载。**注意（评审修正）：**
-有两个配方默认值对**所有**运行（含 `KV_PERSIST=0`）生效——`MAX_NUM_SEQS` 1 → 2（用户决定：
-无并行请求时速度不受影响，默认值更方便）和 `KV_CACHE_DTYPE` `auto`（= 模型默认值；已验证
+有两个配方默认值对**所有**运行（含 `KV_PERSIST=0`）生效——`MAX_NUM_SEQS` 1 → 2 → 10 （历史：
+1→2 仅在 N<=2 时实测；N=3..10 未测量——见「并发」章节）和 `KV_CACHE_DTYPE` `auto`（= 模型默认值；已验证
 的基准测试跑在 auto）。如需精确复现旧基准条件，请在 `tp4.env` 中设置 `MAX_NUM_SEQS=1`
 或显式 `KV_CACHE_DTYPE`。**设置 `KV_PERSIST=1` 时启动器做四件事**（评审修正）：
 1. **缓存身份命名空间**：`MODEL_DIR` 挂载到 `/models/<命名空间>`（而非 `/model`），因此

@@ -64,6 +64,7 @@ _kvp_seed_env_file(){
       _kvp_val="${_kvp_val#"${_kvp_val%%[![:space:]]*}"}"  # leading whitespace
       _kvp_val="${_kvp_val%"${_kvp_val##*[![:space:]]}"}"  # trailing whitespace
       _kvp_val="${_kvp_val//\"/}"                       # surrounding double quotes
+      _kvp_val="$(printf '%s' "$_kvp_val" | tr -d "\'")"   # strip single quotes too (r88 L2), quote-safe
       case "$_kvp_val" in
         *'$HOME'*|*'${HOME}'*)
           _kvp_val="${_kvp_val//\$HOME/$HOME}"
@@ -98,8 +99,17 @@ _kvp_note_old_default(){
   [ -n "$_kvp_nd_line" ] || return 0
   _kvp_nd_val="${_kvp_nd_line#*=}"
   _kvp_nd_val="${_kvp_nd_val%% #*}"
+  # Strip surrounding double/single quotes from the VALUE before trimming
+  # whitespace (review r88 L2): `NAME="2"` must NOT miss the note, and
+  # `NAME='2'` must match the same value instead of tripping the validator.
+  # strip leading/trailing quote chars (double OR single), review r88 L2
+  _kvp_nd_val="$(printf '%s' "$_kvp_nd_val" | sed -e "s/^[\"']//" -e "s/[\"']$//")"
   _kvp_nd_val="$(printf '%s' "$_kvp_nd_val" | tr -d '[:space:]')"
   [ "$_kvp_nd_val" = "$_kvp_nd_old" ] || return 0
+  # r88 L2 cont.: if the EFFECTIVE value (env) already differs from the file's
+  # pin, the operator has overridden it -- no NOTE (nothing stale is in play).
+  _kvp_nd_eff="${!_kvp_nd_name:-}"
+  [ -n "$_kvp_nd_eff" ] && [ "$_kvp_nd_eff" != "$_kvp_nd_val" ] && return 0
   echo "NOTE: tp4.env pins ${_kvp_nd_name}=${_kvp_nd_old} (the old default); the recipe default is now ${_kvp_nd_new}. Delete that line to use the new default. Nothing was changed." >&2
   return 0
 }

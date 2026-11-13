@@ -141,25 +141,32 @@ def test_seeded_env_gives_10(lp, stub_env):
         f"seeded tp4.env must give 10:\n{(r.stdout+r.stderr)[-400:]}")
 
 # ---------------- old-pin-note (mutation: file edited / NOTE twice) -------
-def test_old_pin_note_keeps_file_and_value(stub_env):
+# L1 (review 88): BOTH MiMo launchers are exercised -- a mutation that drops
+# the NOTE call from run-tp4-uva.sh alone must ALSO be caught.
+@pytest.mark.parametrize("launcher_name",
+                         ["run-tp4-hotsplit.sh", "run-tp4-uva.sh"])
+def test_old_pin_note_keeps_file_and_value(stub_env, launcher_name):
     """Copy the recipe dir into the sandbox, write tp4.env with the old pin
     MAX_NUM_SEQS=2, then run the launcher: one NOTE + the file is
     byte-unchanged + the run still uses 2 (user choice preserved).
     MUTATION caught: launcher rewrites tp4.env, edits it, or prints NOTE
-    more than once per run."""
+    more than once per run; L1 mutation: __Call removed in one launcher__."""
     env, log, tmp = stub_env
-    import shutil, tempfile
-    sandbox = tmp / "recipe"
+    import shutil
+    sandbox = tmp / ("recipe_" + launcher_name.replace(".sh", "").replace("-", "_"))
     shutil.copytree(MIMO, sandbox / "mimo-v2.6-pro-hotsplit")
     tp4 = sandbox / "mimo-v2.6-pro-hotsplit" / "tp4.env"
     tp4.write_text("MAX_NUM_SEQS=2   # old pin\n")
     h_before = hashlib.sha256(tp4.read_bytes()).hexdigest()
-    r = _run(sandbox / "mimo-v2.6-pro-hotsplit" / "scripts" / "run-tp4-hotsplit.sh",
+    r = _run(sandbox / "mimo-v2.6-pro-hotsplit" / "scripts" / launcher_name,
              env, log, {})
     out = r.stdout + r.stderr
-    assert hashlib.sha256(tp4.read_bytes()).hexdigest() == h_before, "tp4.env must NEVER be edited"
-    assert out.count("tp4.env pins MAX_NUM_SEQS=2") == 1, f"exactly one caller NOTE per run expected:\n{out[-500:]}"
-    assert _seqs(_run_line(log)) == "2", f"user's 2 must stay 2, got {_seqs(_run_line(log))}"
+    assert hashlib.sha256(tp4.read_bytes()).hexdigest() == h_before, \
+        f"{launcher_name}: tp4.env must NEVER be edited"
+    assert out.count("tp4.env pins MAX_NUM_SEQS=2") == 1, \
+        f"{launcher_name}: exactly one NOTE expected:\n{out[-500:]}"
+    assert _seqs(_run_line(log)) == "2", \
+        f"{launcher_name}: user's 2 must stay 2, got {_seqs(_run_line(log))}"
 
 def test_note_helper_speaks_once(stub_env):
     """Direct execution of _kvp_note_old_default against a file that pins the

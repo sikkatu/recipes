@@ -200,8 +200,8 @@ vLLM restarts via an external cache service ([kv-persistence](https://github.com
 The recipe carries an **opt-in** integration, off by default — with `KV_PERSIST` unset
 no cache connector is attached and no namespace remount happens. **NOTE (review fix):**
 two recipe defaults changed for ALL runs, `KV_PERSIST=0` included —
-`MAX_NUM_SEQS` 1 → 2 (user decision: no speed loss without a parallel request, more
-convenient default) and `KV_CACHE_DTYPE` `auto` (= the model default; the VERIFIED
+`MAX_NUM_SEQS` 1 → 2 → 10 (history: 1→2 was user-verified at N<=2 only; N=3..10
+were NOT measured -- see the Concurrency section) and `KV_CACHE_DTYPE` `auto` (= the model default; the VERIFIED
 benchmarks ran on auto). Set `MAX_NUM_SEQS=1` / an explicit `KV_CACHE_DTYPE` in
 `tp4.env` to reproduce the old benchmark conditions exactly.
 **With `KV_PERSIST=1` the launcher does FOUR things** (review fix):
