@@ -102,6 +102,11 @@ _kvp_note_old_default(){
   # Strip surrounding double/single quotes from the VALUE before trimming
   # whitespace (review r88 L2): `NAME="2"` must NOT miss the note, and
   # `NAME='2'` must match the same value instead of tripping the validator.
+  # Strip a trailing CR FIRST (r89 review): a CRLF-copied tp4.env gives a
+  # value like `2` + CR -- the quote-stripping sed never matches a CR-
+  # suffixed line end and every later comparison silently mismatches.
+  # tr -d '\r' removes carriage returns before any other handling.
+  _kvp_nd_val="$(printf '%s' "$_kvp_nd_val" | tr -d '\r')"
   # strip leading/trailing quote chars (double OR single), review r88 L2
   _kvp_nd_val="$(printf '%s' "$_kvp_nd_val" | sed -e "s/^[\"']//" -e "s/[\"']$//")"
   _kvp_nd_val="$(printf '%s' "$_kvp_nd_val" | tr -d '[:space:]')"

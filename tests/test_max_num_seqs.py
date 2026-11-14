@@ -200,6 +200,27 @@ def test_note_helper_silent_for_new_default(stub_env):
     assert r.returncode == 0
     assert r.stderr.count("tp4.env pins MAX_NUM_SEQS=2") == 0, f"no NOTE expected for value=10:\n{r.stderr}"
 
+# ---------------- CRLF + quoted pin (r89 review) -------------------------
+@pytest.mark.parametrize("recipe", sorted((BASE).glob("*/scripts/kvp-common.sh")))
+def test_note_helper_handles_crlf_quoted_pin(stub_env, recipe):
+    """A CRLF-copied tp4.env with a QUOTED old pin (MAX_NUM_SEQS="2" + CR)
+    must still produce exactly ONE NOTE (r89: `tr -d '\r'` runs BEFORE the
+    quote-stripping sed).
+    MUTATION caught: dropping the CR strip -- the quote-stripping sed then
+    cannot see the closing quote in front of the CR, `2"` never matches `2`
+    and the NOTE silently disappears (the reviewed bug)."""
+    env, log, tmp = stub_env
+    tp4 = tmp / "tp4_crlf.env"
+    tp4.write_bytes(b'MAX_NUM_SEQS="2"\r\n')
+    script = "set -e\n. %s\n_kvp_note_old_default MAX_NUM_SEQS 2 10 %s\n" % (
+        str(recipe), str(tp4))
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=15)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stderr.count("tp4.env pins MAX_NUM_SEQS=2") == 1, (
+        f"{recipe}: CRLF+quoted pin must give exactly one NOTE; got:\n{r.stderr}")
+    assert tp4.read_bytes() == b'MAX_NUM_SEQS="2"\r\n', (
+        f"{recipe}: the helper must never edit the input file")
+
 # ---------------- three-env-examples (mutation: 2 in one locale) ----------
 def test_three_env_examples_agree_on_10():
     """All three tp4.env.example say MAX_NUM_SEQS=10 and agree with
