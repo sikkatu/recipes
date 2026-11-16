@@ -176,7 +176,15 @@ def test_sitecustomize_is_inert_without_env():
         "before = list(sys.meta_path)\n"
         "import runpy; runpy.run_path(%r)\n"
         "assert 'numa_bind' not in sys.modules and 'torch' not in sys.modules\n"
-        "assert sys.meta_path == before\n"
+        # r90c P0-1: the passive _PostImport finder IS registered
+        # unconditionally (find_spec would execute lmcache/__init__ ->
+        # torch in every process). Inertness = NO imports triggered; the
+        # only allowed meta_path additions are passive _PostImport
+        # finders, nothing else.
+        "after = list(sys.meta_path)\n"
+        "added = [f for f in after if f not in before]\n"
+        "for f in added:\n"
+        "    assert type(f).__name__ == '_PostImport', f'unexpected meta_path entry: {f!r}'\n"
     ) % (str(PATCHES), str(PATCHES / "sitecustomize.py"))
     subprocess.run([sys.executable, "-c", code], check=True)
 

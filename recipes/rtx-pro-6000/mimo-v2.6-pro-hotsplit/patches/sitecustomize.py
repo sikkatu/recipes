@@ -116,6 +116,14 @@ else:
 # lmcache.integration.vllm.vllm_multi_process_adapter finishes importing.
 def _install_race_guard(_module):
     sys.path.insert(0, _HERE)
+    # r90c P0-3: fail-closed version gate -- the launcher hashes the
+    # installed LMCache adapter and only sets KVP_RACE_GUARD=1 for the exact
+    # v0.5.6 build this patch was written against. Any other build starts
+    # unpatched (a wrong-API wrap could crash the engine -- worse than no
+    # guard at all).
+    if os.environ.get("KVP_RACE_GUARD", "0") != "1":
+        _inactive("lmcache_adapter_race_guard")   # version gate declined (KVP_RACE_GUARD!=1)
+        return
     try:
         import lmcache_mp_adapter_race as _guard
         res = _guard.install()
@@ -126,17 +134,13 @@ def _install_race_guard(_module):
             _inactive("lmcache_adapter_race_guard")
     except Exception as e:
         _fail("lmcache_adapter_race_guard", repr(e))
-# r90 C2 (review fix): find_spec RAISES ModuleNotFoundError when an intermediate
-# package (lmcache) is absent -- never let that kill the engine start-up. The
-# guard must be a strict no-op whenever LMCache is not imported in this process.
-try:
-    _lmcache_mod_avail = importlib.util.find_spec(
-        "lmcache.integration.vllm.vllm_multi_process_adapter") is not None
-except Exception:
-    _lmcache_mod_avail = False
-if _lmcache_mod_avail:
-    sys.meta_path.insert(0,
-        _PostImport("lmcache.integration.vllm.vllm_multi_process_adapter", _install_race_guard))
-else:
-    _inactive("lmcache_adapter_race_guard")   # lmcache not installed -- inert
+# r90c P0-1: register the finder UNCONDITIONALLY and without find_spec.
+# importlib.util.find_spec("a.b.c") EXECUTES the parent packages (a/__init__
+# runs) to resolve the dotted name -- lmcache/__init__ imports torch and picks
+# a device, so the old probe dragged torch into EVERY python process of the
+# container (API server, workers, plain `python3 -c`) before vLLM itself
+# wanted it. The _PostImport finder is passive: it only fires when the
+# adapter module is really imported; if lmcache never loads, nothing happens.
+sys.meta_path.insert(0,
+    _PostImport("lmcache.integration.vllm.vllm_multi_process_adapter", _install_race_guard))
 

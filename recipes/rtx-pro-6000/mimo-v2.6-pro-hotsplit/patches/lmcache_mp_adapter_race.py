@@ -1,9 +1,21 @@
 """lmcache_mp_adapter_race.py -- r90 C2 (fixed 90b): upstream race guard.
 
 LMCache #4185 / vLLM #49089 / LMCache PR #4136 (NOT merged at verify time).
-Race: retrieve->False -> vLLM deletes the request via finished_recving; a
-LATER get_finished returns the same id in finished_sending (ret_stores) ->
-scheduler assert -> EngineDeadError.
+
+TWO race shapes are covered (r90c P0-2):
+  Form 1 (retrieve failure): retrieve->False -> vLLM deletes the request via
+    finished_recving; a LATER get_finished returns the same id in
+    finished_sending (ret_stores) -> scheduler assert -> EngineDeadError.
+    Guarded by the persistent failed-retrieve set (below).
+  Form 2 (client abort mid-retrieve, LMCache #4185): the adapter reports
+    finished_sending FIRST, then -- when the in-flight load completes --
+    finished_recving for the SAME id. The scheduler already freed the request
+    on finished_sending, so the late finished_recving trips the same assert.
+    Guarded by snapshotting `_returned_finished` (sent_before) before each
+    get_finished call and dropping finished_recving ids seen there.
+Lazy-offload mode is NOT affected: get_finished_with_lazy_offload returns
+None for finished_sending (no such race); its wrapper only keeps form-1
+protection. LAUNCHERS do not enable lazy offload.
 
 r90b review fix: get_finished lives in LMCacheMPWorkerAdapter (verified by
 AST scan of the real v0.5.6 source), NOT LMCacheMPSchedulerAdapter. Also the
@@ -73,10 +85,20 @@ def install() -> dict:
 
     @functools.wraps(orig_get_finished)
     def wrapped_get_finished(self, finished_req_ids_from_engine):
+        # r90c P0-2 (form 2): ids already handed to the scheduler as
+        # finished_sending are freed there -- a LATE finished_recving for the
+        # same id (client abort while the retrieve was in flight) trips the
+        # scheduler assert. Snapshot before the call; filter after.
+        sent_before = set(getattr(self, "_returned_finished", ()) or ())
         before = _snap(self)
         ret_stores, finished_retrieves = orig_get_finished(self, finished_req_ids_from_engine)
         for rid in _snap(self) - before:
             _remember(self, rid)
+        if finished_retrieves and sent_before:
+            late_recv = finished_retrieves & sent_before
+            if late_recv:
+                finished_retrieves = finished_retrieves - late_recv
+                print("lmcache_mp_adapter_race: dropped finished_recving for already-sent request(s): %s" % sorted(late_recv), flush=True)
         return _filter_late_sends(self, ret_stores), finished_retrieves
 
     @functools.wraps(orig_get_failed)
@@ -103,5 +125,5 @@ def install() -> dict:
         cls.get_finished_with_lazy_offload = wrapped_lazy
 
     cls._kvp_race_guard = True
-    print("lmcache_mp_adapter_race: ACTIVE on LMCacheMPWorkerAdapter (finished_sending filtered against a persistent failed-retrieve set; upstream fix #4136 not merged)")
+    print("lmcache_mp_adapter_race: ACTIVE on LMCacheMPWorkerAdapter (form 1: finished_sending filtered against a persistent failed-retrieve set; form 2: finished_recving filtered for already-sent requests; upstream fix #4136 not merged)")
     return {"status": "ACTIVE"}

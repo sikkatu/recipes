@@ -314,3 +314,5 @@ wiki「已知上游问题」。因此下文测量针对 LMCache 路径仅限 N <
 kv-persistence `docs/final-report.md`。
 
 **不兼容警告（r90b）：** 不要将 `KVP_LOAD_FAILURE_POLICY=recompute` 与临时保护 C2（`patches/lmcache_mp_adapter_race.py`）一起使用，除非这对组合已明确验证。`recompute` 下加载失败后请求不会释放，但 C2 会将它的 `finished_sending` 从 `ret_stores` 中丢弃——这批 KV 块无法回收、会泄漏（内存上限悄悄上涨直到引擎崩溃）。二选一：移除 C2（它为默认的 `fail` 策略而作），或保留 C2 且只用 `fail`。组合使用须等上游 PR #4136 并经过明确验证。
+
+**竞态保护范围（r90c P1-2）：** 临时补丁（`patches/lmcache_mp_adapter_race.py`）覆盖 N>=2 且 `KV_PERSIST=1` 时的两种竞态：(1) retrieve->False 后迟到的 `finished_sending`；(2) retrieve 过程中客户端断开后迟到的 `finished_recving`（LMCache #4185）。lazy-offload 模式（`lmcache.mp.lazy_offload`）不受影响——`get_finished_with_lazy_offload` 不返回 `finished_sending`，两种形式都不存在；启动器未启用该模式。在上游 PR #4136 合并并验证之前，不要将 `KVP_LOAD_FAILURE_POLICY=recompute` 与保护补丁组合使用（见上方警告）。待上游修复进入 LMCache 发行版后：更新依赖并删除此补丁。
