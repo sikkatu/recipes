@@ -281,3 +281,5 @@ Full setup, persistence verification and rollback: the
 [kv-persistence wiki](https://github.com/sikkatu/kv-persistence/wiki). Recovery acceptance (`test-recovery.sh`) PASSED on the target GPU host
 (2026-11-07, `cached_tokens=2560`, L2 read events = 1, machine verdict PASS)
 -- evidence in kv-persistence `docs/final-report.md`.
+
+**Incompatibility warning (r90b):** do NOT combine `KVP_LOAD_FAILURE_POLICY=recompute` with the temporary C2 guard (`patches/lmcache_mp_adapter_race.py`) until this pairing is explicitly verified. With `recompute`, a request is NOT freed after a failed load, but the C2 guard drops its matching `finished_sending` out of `ret_stores` -- those KV blocks are then never reclaimed and LEAK (the memory ceiling quietly grows until the engine dies). Pick ONE: either drop C2 (it is built for the default `fail` policy) or keep C2 and use `fail` only. Combining both must wait for upstream PR #4136 plus an explicit verification run.

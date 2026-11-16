@@ -1,0 +1,15 @@
+{
+  "LMCacheMPWorkerAdapter": [
+    "get_finished",
+    "get_finished_with_lazy_offload",
+    "get_failed_request_ids",
+    "_failed_request_ids",
+    "error_block_ids"
+  ],
+  "LMCacheMPSchedulerAdapter": [
+    "maybe_submit_lookup_request",
+    "check_lookup_result",
+    "is_healthy"
+  ],
+  "generated_from": "AST scan of lmcache 0.5.6 vllm_multi_process_adapter.py"
+}

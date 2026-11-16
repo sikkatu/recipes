@@ -312,3 +312,5 @@ wiki「已知上游问题」。因此下文测量针对 LMCache 路径仅限 N <
 [kv-persistence wiki](https://github.com/sikkatu/kv-persistence/wiki)。恢复验收（`test-recovery.sh`）已在目标 GPU 主机上通过（2026-11-07，
 `cached_tokens=2560`，L2 读取事件 = 1，机器判定 PASS）——证据见
 kv-persistence `docs/final-report.md`。
+
+**不兼容警告（r90b）：** 不要将 `KVP_LOAD_FAILURE_POLICY=recompute` 与临时保护 C2（`patches/lmcache_mp_adapter_race.py`）一起使用，除非这对组合已明确验证。`recompute` 下加载失败后请求不会释放，但 C2 会将它的 `finished_sending` 从 `ret_stores` 中丢弃——这批 KV 块无法回收、会泄漏（内存上限悄悄上涨直到引擎崩溃）。二选一：移除 C2（它为默认的 `fail` 策略而作），或保留 C2 且只用 `fail`。组合使用须等上游 PR #4136 并经过明确验证。
