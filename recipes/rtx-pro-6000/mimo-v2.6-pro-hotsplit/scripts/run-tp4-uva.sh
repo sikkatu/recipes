@@ -290,9 +290,18 @@ Set SITE= explicitly to skip the probe." ;;
   _adapter_py="$SITE/lmcache/integration/vllm/vllm_multi_process_adapter.py"
   _connector_py="$SITE/lmcache/integration/vllm/lmcache_mp_connector.py"
   _metadata_py="$SITE/lmcache/integration/vllm/lmcache_mp_metadata.py"
-  LMC_ADAPTER_SHA="$(docker run --rm -v "$SITE:/site:ro" --entrypoint sha256sum "$IMAGE" "/site/lmcache/integration/vllm/vllm_multi_process_adapter.py" 2>/dev/null | awk '{print $1}')"
-  LMC_CONNECTOR_SHA="$(docker run --rm -v "$SITE:/site:ro" --entrypoint sha256sum "$IMAGE" "/site/lmcache/integration/vllm/lmcache_mp_connector.py" 2>/dev/null | awk '{print $1}')"
-  LMC_METADATA_SHA="$(docker run --rm -v "$SITE:/site:ro" --entrypoint sha256sum "$IMAGE" "/site/lmcache/integration/vllm/lmcache_mp_metadata.py" 2>/dev/null | awk '{print $1}')"
+  # r90c fix (launch crash): compute the hashes with python3 inside the image
+  # (guaranteed present) -- `sha256sum` is NOT in the vLLM image and the
+  # `docker run | awk` pipeline under `set -Eeuo pipefail` killed the launch
+  # right here. `|| true` on each: a hash failure must NEVER abort the
+  # launch -- fail-closed means "guard off", not "refuse to start".
+  LMC_ADAPTER_SHA="$(docker run --rm -v "$SITE:/site:ro" --entrypoint python3 "$IMAGE" -c "import hashlib;print(hashlib.sha256(open('/site/lmcache/integration/vllm/vllm_multi_process_adapter.py','rb').read()).hexdigest())" 2>/dev/null || true)"
+  LMC_CONNECTOR_SHA="$(docker run --rm -v "$SITE:/site:ro" --entrypoint python3 "$IMAGE" -c "import hashlib;print(hashlib.sha256(open('/site/lmcache/integration/vllm/lmcache_mp_connector.py','rb').read()).hexdigest())" 2>/dev/null || true)"
+  LMC_METADATA_SHA="$(docker run --rm -v "$SITE:/site:ro" --entrypoint python3 "$IMAGE" -c "import hashlib;print(hashlib.sha256(open('/site/lmcache/integration/vllm/lmcache_mp_metadata.py','rb').read()).hexdigest())" 2>/dev/null || true)"
+  # trim any stray whitespace/newline from the captured hash
+  LMC_ADAPTER_SHA="$(printf '%s' "$LMC_ADAPTER_SHA" | tr -d '[:space:]')"
+  LMC_CONNECTOR_SHA="$(printf '%s' "$LMC_CONNECTOR_SHA" | tr -d '[:space:]')"
+  LMC_METADATA_SHA="$(printf '%s' "$LMC_METADATA_SHA" | tr -d '[:space:]')"
   echo "LMCache adapter sha256: ${LMC_ADAPTER_SHA:-<unavailable>}"
   echo "LMCache connector sha256: ${LMC_CONNECTOR_SHA:-<unavailable>}"
   echo "LMCache metadata sha256: ${LMC_METADATA_SHA:-<unavailable>}"
