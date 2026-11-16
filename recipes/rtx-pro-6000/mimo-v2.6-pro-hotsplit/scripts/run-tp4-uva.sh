@@ -248,7 +248,7 @@ if [ "$PATCH_MODEL_FILES" = 1 ]; then
   ( cd "$RECIPE/patches" && sha256sum -c MANIFEST.sha256 >/dev/null 2>&1 ) \
     || die "patches/ do not match patches/MANIFEST.sha256. The model-replacement patches must be
 byte-identical to the reviewed set; regenerate the manifest only after a deliberate change:
-  ( cd patches && sha256sum mimo_v2_hotsplit.py mimo_v2_omni.py hotsplit.py hotsplit_plan.py numa_bind.py sitecustomize.py expert_hist_mix.json > MANIFEST.sha256 )"
+  ( cd patches && sha256sum mimo_v2_hotsplit.py mimo_v2_omni.py hotsplit.py hotsplit_plan.py numa_bind.py sitecustomize.py lmcache_mp_adapter_race.py expert_hist_mix.json > MANIFEST.sha256 )"
   echo "patch manifest verified against patches/MANIFEST.sha256"
   # find_spec("vllm") returns the PACKAGE dir (.../dist-packages/vllm). The mount targets
   # $SITE/vllm/model_executor/models/, so SITE must be the site-packages ROOT (the parent).
@@ -493,6 +493,33 @@ accept that remote-fetch deployments of the same HF id share cache blocks."
     MODEL_ARGS=(--model "$MODEL_MOUNT")
   fi
   KV_TRANSFER_CONFIG="{\"kv_connector\":\"LMCacheMPConnector\",\"kv_connector_module_path\":\"lmcache.integration.vllm.lmcache_mp_connector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"lmcache.mp.host\":\"tcp://$KV_PERSIST_HOST\",\"lmcache.mp.port\":\"$KV_PERSIST_PORT\"}}"
+  # r90 C3: optional kv_load_failure_policy (EXPERIMENTAL -- NOT measured on
+  # the hybrid model; see "Known upstream issue" in the README/Concurrency note).
+  # unset  -> behaviour unchanged (vLLM's own default `fail`);
+  # fail   -> abort the request on a failed KV load (same default, explicit);
+  # recompute -> rebuild KV on load failure instead of knackering the request
+  #              (latency cost -- diagnostics only, not benchmarked here).
+  if [ -n "${KVP_LOAD_FAILURE_POLICY:-}" ]; then
+    case "$KVP_LOAD_FAILURE_POLICY" in
+      fail|recompute) : ;;
+      *)
+        echo "ERROR: KVP_LOAD_FAILURE_POLICY must be 'fail' or 'recompute', got '$KVP_LOAD_FAILURE_POLICY'" >&2
+        exit 1
+        ;;
+    esac
+    KV_TRANSFER_CONFIG="${KV_TRANSFER_CONFIG%?},\"kv_load_failure_policy\":\"$KVP_LOAD_FAILURE_POLICY\"}"
+    echo "KV_PERSIST=1: KVP_LOAD_FAILURE_POLICY=$KVP_LOAD_FAILURE_POLICY wired into --kv-transfer-config (EXPERIMENTAL, not measured)"
+  fi
+  # r90 C2: the minimal /w patch set needed by sitecustomize.py -> install
+  # the LMCache adapter race guard (LMCache #4185 / PR #4136, TEMPORARY until
+  # upstream merges). Loaded automatically by Python (sitecustomize) at
+  # interpreter start of every vLLM process inside this container.
+  MOUNTS+=(
+    -v "$RECIPE/patches/sitecustomize.py:/w/sitecustomize.py:ro"
+    -v "$RECIPE/patches/numa_bind.py:/w/numa_bind.py:ro"
+    -v "$RECIPE/patches/lmcache_mp_adapter_race.py:/w/lmcache_mp_adapter_race.py:ro"
+  )
+  echo 'PYTHONPATH=/w' >> "$LIVE_DIR/.engine-env"
   echo "KV_PERSIST=1: attaching LMCache connector at $KV_PERSIST_HOST:$KV_PERSIST_PORT (wiki: kv-persistence)"
   echo "KV_PERSIST=1: cache-identity namespace -> ${MODEL_MOUNT:-$MODEL_ARG} (incompatible deployments get a safe cache miss)"
   MODEL_ARGS+=(--kv-transfer-config "$KV_TRANSFER_CONFIG")

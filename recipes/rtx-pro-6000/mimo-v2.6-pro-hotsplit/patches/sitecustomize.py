@@ -105,3 +105,38 @@ if os.environ.get("HOTSPLIT_BOOT_HOOK") == "1":
     sys.meta_path.insert(0, _PostImport("vllm.model_executor.model_loader.base_loader", _wrap_loader))
 else:
     _inactive("boot_hook")
+
+# ---------------- LMCache adapter race guard (r90 C2) ----------------
+# See patches/lmcache_mp_adapter_race.py: get_finished() can report a LATE
+# finished_sending (ret_stores) for a request whose retrieve FAILED earlier
+# -> vLLM scheduler assert -> EngineDeadError. The guard filters
+# _failed_request_ids out of the finished_sending set. TEMPORARY: remove
+# once LMCache PR #4136 is released (upstream issue LMCache #4185,
+# vLLM #49089). Uses the _PostImport finder defined above, right after
+# lmcache.integration.vllm.vllm_multi_process_adapter finishes importing.
+def _install_race_guard(_module):
+    sys.path.insert(0, _HERE)
+    try:
+        import lmcache_mp_adapter_race as _guard
+        res = _guard.install()
+        st = res.get("status", "?")
+        if st in ("ACTIVE", "IDEMPOTENT"):
+            _ok("lmcache_adapter_race_guard")
+        else:
+            _inactive("lmcache_adapter_race_guard")
+    except Exception as e:
+        _fail("lmcache_adapter_race_guard", repr(e))
+# r90 C2 (review fix): find_spec RAISES ModuleNotFoundError when an intermediate
+# package (lmcache) is absent -- never let that kill the engine start-up. The
+# guard must be a strict no-op whenever LMCache is not imported in this process.
+try:
+    _lmcache_mod_avail = importlib.util.find_spec(
+        "lmcache.integration.vllm.vllm_multi_process_adapter") is not None
+except Exception:
+    _lmcache_mod_avail = False
+if _lmcache_mod_avail:
+    sys.meta_path.insert(0,
+        _PostImport("lmcache.integration.vllm.vllm_multi_process_adapter", _install_race_guard))
+else:
+    _inactive("lmcache_adapter_race_guard")   # lmcache not installed -- inert
+

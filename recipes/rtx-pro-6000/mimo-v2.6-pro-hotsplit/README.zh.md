@@ -209,7 +209,19 @@ Grafana 面板 `kv-persistence · Inference` 中）以及日志行 `GPU KV cache
 N = 1..10 个并行 streaming 请求，校验答案正确性，并给出「拐点」（每流速度骤降
 或 KV 被塞满的 N）。Grafana 面板可实时查看。
 
-**诚实状态。** 目标硬件上只测量到 N <= 2。N = 3..10 未测量；`--max-num-seqs 10`
+**已知上游问题，在 N=2 + LMCache 时观察到（r90 C4）。** 启用 `KV_PERSIST=1`
+（LMCache 持久缓存）后，第二个并发请求可能杀死引擎：`LMCache ERROR ...
+processing the retrieve ... result=False` 之后 `EngineCore` 在
+`scheduler.py: _update_from_kv_xfer_finished: assert req_id in self.requests`
+断言失败，所有请求返回 500（`EngineDeadError`）。这是 LMCache vLLM 适配器的
+已知竞争（上游问题 LMCache #4185 / vLLM #49089，LMCache PR #4136 未合并）。
+本recipe 带有临时保护补丁（`patches/lmcache_mp_adapter_race.py`，由
+`sitecustomize.py` 注入）过滤迟到的 `finished_sending` ——见 kv-persistence
+wiki「已知上游问题」。因此下文测量针对 LMCache 路径仅限 N <= 2；补丁未经硬件
+验证——带 `KV_PERSIST=1` 的并发请视为 N>2 未测。
+
+**诚实状态。** 目标硬件上只测量到 N <= 2（且 LMCache 路径在 N=2 有上述引擎
+死亡问题）。N = 3..10 未测量；`--max-num-seqs 10`
 下的 CUDA 图捕获未验证（首次启动请检查日志中的 `Capturing CUDA graphs` 行和错误）。
 有实测结果后会连同日期补充到这里。历史备注：计数器包含已捕获 batch 的 padding
 槽位 —— 在 `--max-num-seqs 1` 时可忽略，N 越大偏差越大；比较请在相同

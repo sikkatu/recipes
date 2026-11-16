@@ -91,7 +91,7 @@ def stream_request(url, key, prompt, model, max_tokens, seed=None,
     except Exception as e:
         return {"ttft": (t_first-t0) if t_first else None, "gen_tokens": usage,
                 "decode_tps": None, "text": "".join(text),
-                "err": type(e).__name__, "wall": time.time()-t0}
+                "err": type(e).__name__, "err_msg": str(e)[:200], "wall": time.time()-t0}
     ttft = (t_first-t0) if t_first else None
     dt = None
     if usage and t_last and t_first and t_last > t_first and usage >= 2:
@@ -162,6 +162,16 @@ def correctness_check(url, key, model, prompts, max_tokens, k, seed=1234):
             "diverges_early": div_early, "errors": errs,
             "verdict": verdict, "details": details}
 
+
+def _engine_alive(url, key, timeout=5.0):
+    """r90 C5: health probe for the ENGINE-DIED guard (GET /v1/models)."""
+    try:
+        req = urllib.request.Request(url.rstrip("/") + "/v1/models",
+                                     headers=_headers(key))
+        urllib.request.urlopen(req, timeout=timeout).read()
+        return True
+    except Exception:
+        return False
 
 # ------------------------------- one level ---------------------------------
 def run_level(url, key, model, topics, n, duration, max_tokens,
@@ -239,6 +249,19 @@ def run_level(url, key, model, topics, n, duration, max_tokens,
     notes = []
     if errs:
         notes.append(f"{errs} request(s) errored")
+    # r90 C5: ENGINE-DIED detection -- the reviewed run died with a stream of
+    # 500s (EngineDeadError) mid-sweep and the script kept grinding through
+    # the remaining levels. Declare death when EVERY request of the level
+    # failed AND (an error text says so, or the engine stops answering).
+    engine_dead = False
+    if results and errs == len(results):
+        dead_hint = any(
+            any(tok in (r.get("err_msg") or "").lower()
+                for tok in ("engine-dead", "enginedead",
+                            "http error 500", "http error 503",
+                            "internal server error", "connection reset"))
+            for r in results)
+        engine_dead = dead_hint or not _engine_alive(url, key)
     if any(r["gen_tokens"] is None for r in oks):
         notes.append("usage missing in some responses -- metrics may be incomplete")
     return {"n": n, "requests": len(results), "errors": errs,
@@ -251,6 +274,7 @@ def run_level(url, key, model, topics, n, duration, max_tokens,
             "preemptions_delta": upd,
             "running_ge_n_frac": (smp["running_ge_n"] / smp["wall"]
                                   if smp["wall"] else None),
+            "engine_dead": engine_dead,
             "notes": notes}
 
 
@@ -428,6 +452,20 @@ def main(argv=None):
                   f"{('%.1f' % lv['stream_tps_p50']) if lv['stream_tps_p50'] is not None else 'n/a'}"
                   f"  ttft_p95={(('%.1f' % lv['ttft_p95']) if lv['ttft_p95'] is not None else 'n/a')}s"
                   f"  kv_max={(('%.2f' % lv['kv_max']) if lv['kv_max'] is not None else 'n/a')}")
+            # r90 C5: ENGINE DIED at level N -> stop the sweep HERE with a
+            # loud message (the reviewed run kept grinding through dead
+            # levels and only told the operator at the very end).
+            if lv.get("engine_dead"):
+                print()
+                print(f"ENGINE DIED at N={n} -- stopping the sweep immediately")
+                print("  (every request of the level failed and the engine no")
+                print("   longer answers or reports EngineDead/HTTP 500).")
+                print("  See live/crash-* for the crash evidence (r90 C1;")
+                print("  collect-crash-evidence.sh runs from the launcher paths).")
+                print("  Known issue: LMCache vLLM adapter race at N>=2 with")
+                print("  KV_PERSIST=1 -- LMCache #4185 / vLLM #49089 (temporary")
+                print("  guard ships in patches/lmcache_mp_adapter_race.py).")
+                break
     except KeyboardInterrupt:
         print("\nInterrupted (Ctrl-C) -- writing a PARTIAL report with the "
               f"{len(lvs)} level(s) already measured.")
@@ -445,10 +483,15 @@ def main(argv=None):
         "correctness": corr,
         "levels": lvs,
         "knee": {"n": knee_n, "reason": knee_reason},
-        "verdict": ("knee at N=%s -- %s; recommended ceiling for THIS "
-                    "prompt set: the level before" % (knee_n, knee_reason)
-                    if knee_n else ("no knee up to N=%s measured" % max(levels) if lvs
-                                    else "aborted before any level was measured")),
+        "engine_died_at": next((lv["n"] for lv in lvs if lv.get("engine_dead")), None),
+        "verdict": ("ENGINE DIED at N=%s -- see live/crash-*; concurrent requests "
+                    "at/above this level kill the engine (known LMCache adapter "
+                    "race, LMCache #4185)" % next((lv["n"] for lv in lvs if lv.get("engine_dead")), "?")
+                    if any(lv.get("engine_dead") for lv in lvs) else
+                    ("knee at N=%s -- %s; recommended ceiling for THIS "
+                     "prompt set: the level before" % (knee_n, knee_reason)
+                     if knee_n else ("no knee up to N=%s measured" % max(levels) if lvs
+                                     else "aborted before any level was measured"))),
     }
     out = Path(args.out) if args.out else (
         RECIPE / "benchmarks" / "results" /

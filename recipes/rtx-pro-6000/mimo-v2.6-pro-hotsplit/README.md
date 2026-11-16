@@ -165,9 +165,27 @@ N = 1..10 parallel streaming requests, checks answer correctness, and reports th
 (the N where per-stream speed drops sharply or KV fills). The Grafana dashboard shows
 what is happening live.
 
-**Honest status.** Only N <= 2 has been measured on target hardware. N = 3..10 were NOT
+**Known upstream issue observed at N=2 with LMCache (r90 C4).** With
+`KV_PERSIST=1` (persistent LMCache cache) a SECOND parallel request has been
+seen to kill the engine: `LMCache ERROR ... processing the retrieve ...
+result=False` is followed by `EngineCore` dying on
+`scheduler.py: _update_from_kv_xfer_finished: assert req_id in self.requests`
+and every request returning 500 (`EngineDeadError`). Cause is a known race in
+LMCache's vLLM adapter (upstream issues LMCache #4185 / vLLM #49089, fix
+pending in LMCache PR #4136). This recipe ships a TEMPORARY guard
+(`patches/lmcache_mp_adapter_race.py`, installed by `sitecustomize.py`) that
+filters the late `finished_sending` for requests whose retrieve already
+failed -- see "Known upstream issue" in the KV-persistence wiki. Measurements
+below therefore stand at N <= 2 for the LMCache path; the guard is NOT
+verified on hardware -- treat concurrency with `KV_PERSIST=1` as untested
+beyond N=2.
+
+**Honest status.** Only N <= 2 has been measured on target hardware (and the
+LMCache path has the engine-death issue above at N=2). N = 3..10 were NOT
 measured; CUDA-graph capture at `--max-num-seqs 10` is untested (check the first launch
-log for `Capturing CUDA graphs` and errors). When a measurement exists, it is added here
+log for `Capturing CUDA graphs` and errors). The default `MAX_NUM_SEQS=10`
+is therefore NOT verified at N > 2 with LMCache -- do not change the default
+without operator review. When a measurement exists, it is added here
 with the date. Historical note: counters include padded slots of captured batches --
 negligible at `--max-num-seqs 1`, a growing bias at higher N; compare runs at the same
 `MAX_NUM_SEQS`.

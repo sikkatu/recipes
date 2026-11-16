@@ -156,3 +156,10 @@ HOTSPLIT_MAX_TOKENS=8192                 # лимит токенов живог�
 # KVP_L2_SERDE=none
 # KV_PERSIST_NAMESPACE=      # переопределить выведенный namespace (для продвинутых; оставьте пустым)
 # KV_PERSIST_BLOCK_SIZE=16   # размер KV-блока, фиксируемый через --block-size при KV_PERSIST=1 (должен совпадать с KVP_BLOCK_SIZE); переименован из BLOCK_SIZE, чтобы не задеть чужое окружение
+# r90 C3 (ЭКСПЕРИМЕНТАЛЬНО -- на гибридной модели НЕ измерялось): что делать при
+# сбое загрузки KV (retrieve) запроса. не задано = дефолт vLLM (fail): сбойная
+# загрузка убивает запрос. recompute = пересчитать KV локально. Прокидывается
+# как ключ kv_load_failure_policy внутри --kv-transfer-config.
+# Связано: временная защита адаптера (patches/lmcache_mp_adapter_race.py,
+# LMCache #4185). Только диагностика -- без обещаний.
+# KVP_LOAD_FAILURE_POLICY=
