@@ -298,7 +298,7 @@ mkdir -p "$HF_CACHE" "$LIVE_DIR"
 ( cd "$RECIPE/patches" && sha256sum -c MANIFEST.sha256 >/dev/null 2>&1 ) \
   || die "patches/ do not match patches/MANIFEST.sha256. The model-replacement patches must be
 byte-identical to the reviewed set; regenerate the manifest only after a deliberate change:
-  ( cd patches && sha256sum mimo_v2_hotsplit.py mimo_v2_omni.py hotsplit.py hotsplit_plan.py numa_bind.py sitecustomize.py lmcache_mp_adapter_race.py expert_hist_mix.json > MANIFEST.sha256 )"
+  ( cd patches && sha256sum mimo_v2_hotsplit.py mimo_v2_omni.py hotsplit.py hotsplit_plan.py numa_bind.py sitecustomize.py expert_hist_mix.json > MANIFEST.sha256 )"
 echo "patch manifest verified against patches/MANIFEST.sha256"
 # TRUST BOUNDARY (read this before the first run):
 #   1. The manifest protects against accidental edits and casual tampering -- the manifest lives
@@ -312,7 +312,7 @@ echo "patch manifest verified against patches/MANIFEST.sha256"
 #      'docker inspect' on this host can read it. Keep docker access root-equivalent.
 
 for f in "$RECIPE/patches/hotsplit.py" "$RECIPE/patches/hotsplit_plan.py" "$RECIPE/patches/numa_bind.py" \
-         "$RECIPE/patches/sitecustomize.py" "$RECIPE/patches/lmcache_mp_adapter_race.py" "$RECIPE/patches/expert_hist_mix.json" \
+         "$RECIPE/patches/sitecustomize.py" "$RECIPE/patches/expert_hist_mix.json" \
          "$RECIPE/patches/mimo_v2_hotsplit.py" "$RECIPE/patches/mimo_v2_omni.py"; do
   [ -f "$f" ] || die "missing file: $f"
 done
@@ -354,7 +354,6 @@ MOUNTS+=(
   -v "$RECIPE/patches/hotsplit_plan.py:/w/hotsplit_plan.py:ro"
   -v "$RECIPE/patches/numa_bind.py:/w/numa_bind.py:ro"
   -v "$RECIPE/patches/sitecustomize.py:/w/sitecustomize.py:ro"
-  -v "$RECIPE/patches/lmcache_mp_adapter_race.py:/w/lmcache_mp_adapter_race.py:ro"
   -v "$RECIPE/patches/expert_hist_mix.json:/w/expert_hist_mix.json:ro"
   -v "$LIVE_DIR:/live"
 )
@@ -394,47 +393,6 @@ Set SITE= explicitly to skip the probe." ;;
     esac
   fi
   echo "SITE (auto-detected or overridden): $SITE"
-  # --- r90c P0-3: bind the race-guard patch to EXACTLY LMCache v0.5.6 ---
-  # fail-closed: the patch wraps internals (get_finished /
-  # get_failed_request_ids / _returned_finished) of a SPECIFIC LMCache build.
-  # On any other build we do NOT install it -- launch continues unpatched
-  # (KVP_RACE_GUARD=0 is read by sitecustomize), the hash ALWAYS goes to the
-  # log and into the launch summary, so an operator can see what happened.
-  LMC_ADAPTER_SHA_EXPECTED="83b8784fa8d9c684ed90147aeb30b66e8cb797d54ae05a3aa38879ef8c6c6693"
-  LMC_ADAPTER_SHA_EXPECTED_2="2f7d757d2073fc944ffac2d2c794f727623297fd69215741d423120fb724f986"
-  LMC_ADAPTER_SHA_EXPECTED_3="8a30041694a692b6a6032856f9db069280b0d78c36eba5b920b5f6ff9686865f"
-  _adapter_py="$SITE/lmcache/integration/vllm/vllm_multi_process_adapter.py"
-  _connector_py="$SITE/lmcache/integration/vllm/lmcache_mp_connector.py"
-  _metadata_py="$SITE/lmcache/integration/vllm/lmcache_mp_metadata.py"
-  # r90c fix (launch crash): compute the hashes with python3 inside the image
-  # (guaranteed present) -- `sha256sum` is NOT in the vLLM image and the
-  # `docker run | awk` pipeline under `set -Eeuo pipefail` killed the launch
-  # right here. `|| true` on each: a hash failure must NEVER abort the
-  # launch -- fail-closed means "guard off", not "refuse to start".
-  LMC_ADAPTER_SHA="$(docker run --rm -v "$SITE:/site:ro" --entrypoint python3 "$IMAGE" -c "import hashlib;print(hashlib.sha256(open('/site/lmcache/integration/vllm/vllm_multi_process_adapter.py','rb').read()).hexdigest())" 2>/dev/null || true)"
-  LMC_CONNECTOR_SHA="$(docker run --rm -v "$SITE:/site:ro" --entrypoint python3 "$IMAGE" -c "import hashlib;print(hashlib.sha256(open('/site/lmcache/integration/vllm/lmcache_mp_connector.py','rb').read()).hexdigest())" 2>/dev/null || true)"
-  LMC_METADATA_SHA="$(docker run --rm -v "$SITE:/site:ro" --entrypoint python3 "$IMAGE" -c "import hashlib;print(hashlib.sha256(open('/site/lmcache/integration/vllm/lmcache_mp_metadata.py','rb').read()).hexdigest())" 2>/dev/null || true)"
-  # trim any stray whitespace/newline from the captured hash
-  LMC_ADAPTER_SHA="$(printf '%s' "$LMC_ADAPTER_SHA" | tr -d '[:space:]')"
-  LMC_CONNECTOR_SHA="$(printf '%s' "$LMC_CONNECTOR_SHA" | tr -d '[:space:]')"
-  LMC_METADATA_SHA="$(printf '%s' "$LMC_METADATA_SHA" | tr -d '[:space:]')"
-  echo "LMCache adapter sha256: ${LMC_ADAPTER_SHA:-<unavailable>}"
-  echo "LMCache connector sha256: ${LMC_CONNECTOR_SHA:-<unavailable>}"
-  echo "LMCache metadata sha256: ${LMC_METADATA_SHA:-<unavailable>}"
-  KVP_RACE_GUARD=1
-  if [ "$LMC_ADAPTER_SHA" != "$LMC_ADAPTER_SHA_EXPECTED" ] \
-     || [ "$LMC_CONNECTOR_SHA" != "$LMC_ADAPTER_SHA_EXPECTED_2" ] \
-     || [ "$LMC_METADATA_SHA" != "$LMC_ADAPTER_SHA_EXPECTED_3" ]; then
-    echo "LMCache adapter differs from v0.5.6 -- race guard NOT applied" >&2
-    echo "  expected adapter sha256 : $LMC_ADAPTER_SHA_EXPECTED" >&2
-    echo "  expected connector sha256: $LMC_ADAPTER_SHA_EXPECTED_2" >&2
-    echo "  expected metadata sha256 : $LMC_ADAPTER_SHA_EXPECTED_3" >&2
-    KVP_RACE_GUARD=0
-    RACE_GUARD_SUMMARY="race guard SKIPPED -- LMCache adapter differs from v0.5.6 (sha256 mismatch; see log above)"
-  else
-    RACE_GUARD_SUMMARY="race guard ACTIVE (LMCache v0.5.6 verified by sha256)"
-  fi
-  export KVP_RACE_GUARD
   # compatibility probe: the image's own files must expose the API our patches override
   # The patch overwrites base_loader.process_weights_after_loading (a NAME imported
   # into base_loader's namespace from model_loader/utils.py) -- so verify THAT seam:
@@ -567,11 +525,6 @@ ENVS=(
 # the root-mode /root default) so ONE block owns them -- no drift.
 ENVS+=("${ENGINE_CACHE_ARGS[@]}")
 ENVS+=("${HOTSPLIT_ENVS[@]}")
-# r90c P0-3: the race guard is fail-closed to LMCache v0.5.6 (sha gate
-# above) -- carry the decision INTO the container; sitecustomize.py reads
-# KVP_RACE_GUARD and installs the guard only when it is "1".
-ENVS+=(-e "KVP_RACE_GUARD=${KVP_RACE_GUARD:-0}")
-
 # --- model arguments: arrays, never re-parsed shell strings --------------------------------------
 MODEL_ARGS=(--model "$MODEL_ARG")
 if [ -z "$MODEL_DIR" ]; then

@@ -166,20 +166,10 @@ N = 1..10 parallel streaming requests, checks answer correctness, and reports th
 what is happening live.
 
 **Known upstream issue observed at N=2 with LMCache (r90 C4).** With
-`KV_PERSIST=1` (persistent LMCache cache) a SECOND parallel request has been
-seen to kill the engine: `LMCache ERROR ... processing the retrieve ...
-result=False` is followed by `EngineCore` dying on
-`scheduler.py: _update_from_kv_xfer_finished: assert req_id in self.requests`
-and every request returning 500 (`EngineDeadError`). Cause is a known race in
-LMCache's vLLM adapter (upstream issues LMCache #4185 / vLLM #49089, fix
-pending in LMCache PR #4136). This recipe ships a TEMPORARY guard
-(`patches/lmcache_mp_adapter_race.py`, installed by `sitecustomize.py`) that
-filters the late `finished_sending` for requests whose retrieve already
-failed -- see "Known upstream issue" in the KV-persistence wiki. Measurements
-below therefore stand at N <= 2 for the LMCache path; the guard is NOT
-verified on hardware -- treat concurrency with `KV_PERSIST=1` as untested
-beyond N=2.
-
+`KV_PERSIST=1` a retrieve-abort race (LMCache #4185 / vLLM #49089) was known to kill
+the engine at N>=2. It is FIXED in the custom LMCache build (downstream port of upstream
+PR #4136, shipped in kv-persistence `vendor/patches/lmcache/`); verify the fix on
+hardware before trusting N>=2 measurements.
 **Honest status.** Only N <= 2 has been measured on target hardware (and the
 LMCache path has the engine-death issue above at N=2). N = 3..10 were NOT
 measured; CUDA-graph capture at `--max-num-seqs 10` is untested (check the first launch
@@ -282,6 +272,10 @@ Full setup, persistence verification and rollback: the
 (2026-11-07, `cached_tokens=2560`, L2 read events = 1, machine verdict PASS)
 -- evidence in kv-persistence `docs/final-report.md`.
 
-**Incompatibility warning (r90b):** do NOT combine `KVP_LOAD_FAILURE_POLICY=recompute` with the temporary C2 guard (`patches/lmcache_mp_adapter_race.py`) until this pairing is explicitly verified. With `recompute`, a request is NOT freed after a failed load, but the C2 guard drops its matching `finished_sending` out of `ret_stores` -- those KV blocks are then never reclaimed and LEAK (the memory ceiling quietly grows until the engine dies). Pick ONE: either drop C2 (it is built for the default `fail` policy) or keep C2 and use `fail` only. Combining both must wait for upstream PR #4136 plus an explicit verification run.
+**Race fix provenance (r90, revised):** the retrieve/abort race at N>=2 with
+`KV_PERSIST=1` (both `(1) retrieve->False + late finished_sending` and `(2) client
+abort mid-retrieve + late finished_recving`) is fixed by the CUSTOM LMCache build,
+which carries the complete upstream fix from PR #4136 (see
+kv-persistence `vendor/patches/lmcache/SOURCES.md`). The old local guard plugin has
+been removed. Lazy-offload (`lmcache.mp.lazy_offload`) is unaffected.
 
-**Race guard scope (r90c P1-2):** the temporary patch (`patches/lmcache_mp_adapter_race.py`) closes BOTH known race forms at N>=2 with `KV_PERSIST=1`: (1) retrieve->False followed by a late `finished_sending` and (2) client abort mid-retrieve followed by a late `finished_recving` (LMCache #4185). The lazy-offload mode (`lmcache.mp.lazy_offload`) is NOT affected -- `get_finished_with_lazy_offload` never returns `finished_sending`, so neither form exists there; launchers do not enable it. Do NOT combine `KVP_LOAD_FAILURE_POLICY=recompute` with the guard (see the warning above) until upstream PR #4136 lands and the pairing is verified. Once the upstream fix ships in a LMCache release: update the dependency and DELETE this patch.

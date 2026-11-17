@@ -463,8 +463,8 @@ def main(argv=None):
                 print("  See live/crash-* for the crash evidence (r90 C1;")
                 print("  collect-crash-evidence.sh runs from the launcher paths).")
                 print("  Known issue: LMCache vLLM adapter race at N>=2 with")
-                print("  KV_PERSIST=1 -- LMCache #4185 / vLLM #49089 (temporary")
-                print("  guard ships in patches/lmcache_mp_adapter_race.py).")
+                print("  KV_PERSIST=1 -- LMCache #4185 / vLLM #49089 (fixed in")
+                print("  the custom LMCache build, downstream PR #4136).")
                 break
     except KeyboardInterrupt:
         print("\nInterrupted (Ctrl-C) -- writing a PARTIAL report with the "
@@ -485,8 +485,8 @@ def main(argv=None):
         "knee": {"n": knee_n, "reason": knee_reason},
         "engine_died_at": next((lv["n"] for lv in lvs if lv.get("engine_dead")), None),
         "verdict": ("ENGINE DIED at N=%s -- see live/crash-*; concurrent requests "
-                    "at/above this level kill the engine (known LMCache adapter "
-                    "race, LMCache #4185)" % next((lv["n"] for lv in lvs if lv.get("engine_dead")), "?")
+                    "at/above this level killed the engine (known LMCache adapter "
+                    "race, LMCache #4185, fixed downstream by PR #4136)" % next((lv["n"] for lv in lvs if lv.get("engine_dead")), "?")
                     if any(lv.get("engine_dead") for lv in lvs) else
                     ("knee at N=%s -- %s; recommended ceiling for THIS "
                      "prompt set: the level before" % (knee_n, knee_reason)

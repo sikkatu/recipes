@@ -210,16 +210,9 @@ N = 1..10 个并行 streaming 请求，校验答案正确性，并给出「拐�
 或 KV 被塞满的 N）。Grafana 面板可实时查看。
 
 **已知上游问题，在 N=2 + LMCache 时观察到（r90 C4）。** 启用 `KV_PERSIST=1`
-（LMCache 持久缓存）后，第二个并发请求可能杀死引擎：`LMCache ERROR ...
-processing the retrieve ... result=False` 之后 `EngineCore` 在
-`scheduler.py: _update_from_kv_xfer_finished: assert req_id in self.requests`
-断言失败，所有请求返回 500（`EngineDeadError`）。这是 LMCache vLLM 适配器的
-已知竞争（上游问题 LMCache #4185 / vLLM #49089，LMCache PR #4136 未合并）。
-本recipe 带有临时保护补丁（`patches/lmcache_mp_adapter_race.py`，由
-`sitecustomize.py` 注入）过滤迟到的 `finished_sending` ——见 kv-persistence
-wiki「已知上游问题」。因此下文测量针对 LMCache 路径仅限 N <= 2；补丁未经硬件
-验证——带 `KV_PERSIST=1` 的并发请视为 N>2 未测。
-
+时 retrieve-abort 竞态（LMCache #4185 / vLLM #49089）可能在 N>=2 杀死引擎。
+该问题已在自定义 LMCache 构建（上游 PR #4136 的完整移植，见 kv-persistence
+`vendor/patches/lmcache/`）中修复；请在 N>=2 测量前于硬件上验证。
 **诚实状态。** 目标硬件上只测量到 N <= 2（且 LMCache 路径在 N=2 有上述引擎
 死亡问题）。N = 3..10 未测量；`--max-num-seqs 10`
 下的 CUDA 图捕获未验证（首次启动请检查日志中的 `Capturing CUDA graphs` 行和错误）。
@@ -313,6 +306,9 @@ wiki「已知上游问题」。因此下文测量针对 LMCache 路径仅限 N <
 `cached_tokens=2560`，L2 读取事件 = 1，机器判定 PASS）——证据见
 kv-persistence `docs/final-report.md`。
 
-**不兼容警告（r90b）：** 不要将 `KVP_LOAD_FAILURE_POLICY=recompute` 与临时保护 C2（`patches/lmcache_mp_adapter_race.py`）一起使用，除非这对组合已明确验证。`recompute` 下加载失败后请求不会释放，但 C2 会将它的 `finished_sending` 从 `ret_stores` 中丢弃——这批 KV 块无法回收、会泄漏（内存上限悄悄上涨直到引擎崩溃）。二选一：移除 C2（它为默认的 `fail` 策略而作），或保留 C2 且只用 `fail`。组合使用须等上游 PR #4136 并经过明确验证。
+**竞态修复来源（r90，修订）：** N>=2 且 `KV_PERSIST=1` 时的 retrieve/abort 竞态
+（两种形式：(1) retrieve->False 后迟到 finished_sending；(2) retrieve 中断后迟到
+finished_recving）已由自定义 LMCache 构建关闭，该构建包含上游 PR #4136 的完整
+修复（见 kv-persistence `vendor/patches/lmcache/SOURCES.md`）。旧的本地 guard 插件
+已删除。lazy-offload 不受影响。
 
-**竞态保护范围（r90c P1-2）：** 临时补丁（`patches/lmcache_mp_adapter_race.py`）覆盖 N>=2 且 `KV_PERSIST=1` 时的两种竞态：(1) retrieve->False 后迟到的 `finished_sending`；(2) retrieve 过程中客户端断开后迟到的 `finished_recving`（LMCache #4185）。lazy-offload 模式（`lmcache.mp.lazy_offload`）不受影响——`get_finished_with_lazy_offload` 不返回 `finished_sending`，两种形式都不存在；启动器未启用该模式。在上游 PR #4136 合并并验证之前，不要将 `KVP_LOAD_FAILURE_POLICY=recompute` 与保护补丁组合使用（见上方警告）。待上游修复进入 LMCache 发行版后：更新依赖并删除此补丁。

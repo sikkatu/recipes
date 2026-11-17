@@ -248,7 +248,7 @@ if [ "$PATCH_MODEL_FILES" = 1 ]; then
   ( cd "$RECIPE/patches" && sha256sum -c MANIFEST.sha256 >/dev/null 2>&1 ) \
     || die "patches/ do not match patches/MANIFEST.sha256. The model-replacement patches must be
 byte-identical to the reviewed set; regenerate the manifest only after a deliberate change:
-  ( cd patches && sha256sum mimo_v2_hotsplit.py mimo_v2_omni.py hotsplit.py hotsplit_plan.py numa_bind.py sitecustomize.py lmcache_mp_adapter_race.py expert_hist_mix.json > MANIFEST.sha256 )"
+  ( cd patches && sha256sum mimo_v2_hotsplit.py mimo_v2_omni.py hotsplit.py hotsplit_plan.py numa_bind.py sitecustomize.py expert_hist_mix.json > MANIFEST.sha256 )"
   echo "patch manifest verified against patches/MANIFEST.sha256"
   # find_spec("vllm") returns the PACKAGE dir (.../dist-packages/vllm). The mount targets
   # $SITE/vllm/model_executor/models/, so SITE must be the site-packages ROOT (the parent).
@@ -278,47 +278,6 @@ Set SITE= explicitly to skip the probe." ;;
     esac
   fi
   echo "SITE (auto-detected or overridden): $SITE"
-  # --- r90c P0-3: bind the race-guard patch to EXACTLY LMCache v0.5.6 ---
-  # fail-closed: the patch wraps internals (get_finished /
-  # get_failed_request_ids / _returned_finished) of a SPECIFIC LMCache build.
-  # On any other build we do NOT install it -- launch continues unpatched
-  # (KVP_RACE_GUARD=0 is read by sitecustomize), the hash ALWAYS goes to the
-  # log and into the launch summary, so an operator can see what happened.
-  LMC_ADAPTER_SHA_EXPECTED="83b8784fa8d9c684ed90147aeb30b66e8cb797d54ae05a3aa38879ef8c6c6693"
-  LMC_ADAPTER_SHA_EXPECTED_2="2f7d757d2073fc944ffac2d2c794f727623297fd69215741d423120fb724f986"
-  LMC_ADAPTER_SHA_EXPECTED_3="8a30041694a692b6a6032856f9db069280b0d78c36eba5b920b5f6ff9686865f"
-  _adapter_py="$SITE/lmcache/integration/vllm/vllm_multi_process_adapter.py"
-  _connector_py="$SITE/lmcache/integration/vllm/lmcache_mp_connector.py"
-  _metadata_py="$SITE/lmcache/integration/vllm/lmcache_mp_metadata.py"
-  # r90c fix (launch crash): compute the hashes with python3 inside the image
-  # (guaranteed present) -- `sha256sum` is NOT in the vLLM image and the
-  # `docker run | awk` pipeline under `set -Eeuo pipefail` killed the launch
-  # right here. `|| true` on each: a hash failure must NEVER abort the
-  # launch -- fail-closed means "guard off", not "refuse to start".
-  LMC_ADAPTER_SHA="$(docker run --rm -v "$SITE:/site:ro" --entrypoint python3 "$IMAGE" -c "import hashlib;print(hashlib.sha256(open('/site/lmcache/integration/vllm/vllm_multi_process_adapter.py','rb').read()).hexdigest())" 2>/dev/null || true)"
-  LMC_CONNECTOR_SHA="$(docker run --rm -v "$SITE:/site:ro" --entrypoint python3 "$IMAGE" -c "import hashlib;print(hashlib.sha256(open('/site/lmcache/integration/vllm/lmcache_mp_connector.py','rb').read()).hexdigest())" 2>/dev/null || true)"
-  LMC_METADATA_SHA="$(docker run --rm -v "$SITE:/site:ro" --entrypoint python3 "$IMAGE" -c "import hashlib;print(hashlib.sha256(open('/site/lmcache/integration/vllm/lmcache_mp_metadata.py','rb').read()).hexdigest())" 2>/dev/null || true)"
-  # trim any stray whitespace/newline from the captured hash
-  LMC_ADAPTER_SHA="$(printf '%s' "$LMC_ADAPTER_SHA" | tr -d '[:space:]')"
-  LMC_CONNECTOR_SHA="$(printf '%s' "$LMC_CONNECTOR_SHA" | tr -d '[:space:]')"
-  LMC_METADATA_SHA="$(printf '%s' "$LMC_METADATA_SHA" | tr -d '[:space:]')"
-  echo "LMCache adapter sha256: ${LMC_ADAPTER_SHA:-<unavailable>}"
-  echo "LMCache connector sha256: ${LMC_CONNECTOR_SHA:-<unavailable>}"
-  echo "LMCache metadata sha256: ${LMC_METADATA_SHA:-<unavailable>}"
-  KVP_RACE_GUARD=1
-  if [ "$LMC_ADAPTER_SHA" != "$LMC_ADAPTER_SHA_EXPECTED" ] \
-     || [ "$LMC_CONNECTOR_SHA" != "$LMC_ADAPTER_SHA_EXPECTED_2" ] \
-     || [ "$LMC_METADATA_SHA" != "$LMC_ADAPTER_SHA_EXPECTED_3" ]; then
-    echo "LMCache adapter differs from v0.5.6 -- race guard NOT applied" >&2
-    echo "  expected adapter sha256 : $LMC_ADAPTER_SHA_EXPECTED" >&2
-    echo "  expected connector sha256: $LMC_ADAPTER_SHA_EXPECTED_2" >&2
-    echo "  expected metadata sha256 : $LMC_ADAPTER_SHA_EXPECTED_3" >&2
-    KVP_RACE_GUARD=0
-    RACE_GUARD_SUMMARY="race guard SKIPPED -- LMCache adapter differs from v0.5.6 (sha256 mismatch; see log above)"
-  else
-    RACE_GUARD_SUMMARY="race guard ACTIVE (LMCache v0.5.6 verified by sha256)"
-  fi
-  export KVP_RACE_GUARD
   # compatibility probe: the image's own files must expose load_weights (what the patch replaces)
   PROBE_CMD='import importlib.util,sys
 ok=True
@@ -558,13 +517,8 @@ accept that remote-fetch deployments of the same HF id share cache blocks."
   MOUNTS+=(
     -v "$RECIPE/patches/sitecustomize.py:/w/sitecustomize.py:ro"
     -v "$RECIPE/patches/numa_bind.py:/w/numa_bind.py:ro"
-    -v "$RECIPE/patches/lmcache_mp_adapter_race.py:/w/lmcache_mp_adapter_race.py:ro"
   )
   echo 'PYTHONPATH=/w' >> "$LIVE_DIR/.engine-env"
-  # r90c P0-3: the race guard is fail-closed to LMCache v0.5.6 (sha gate
-  # above) -- carry the decision INTO the container; sitecustomize.py reads
-  # KVP_RACE_GUARD and installs the guard only when it is "1".
-  echo "KVP_RACE_GUARD=${KVP_RACE_GUARD:-0}" >> "$LIVE_DIR/.engine-env"
   echo "KV_PERSIST=1: attaching LMCache connector at $KV_PERSIST_HOST:$KV_PERSIST_PORT (wiki: kv-persistence)"
   echo "KV_PERSIST=1: cache-identity namespace -> ${MODEL_MOUNT:-$MODEL_ARG} (incompatible deployments get a safe cache miss)"
   MODEL_ARGS+=(--kv-transfer-config "$KV_TRANSFER_CONFIG")

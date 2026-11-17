@@ -239,19 +239,10 @@ kv-persistence) и строка лога `GPU KV cache size: ... tokens`. Сум
 Grafana показывает происходящее вживую.
 
 **Известная проблема апстрима, наблюдалась при N=2 с LMCache (r90 C4).** С
-`KV_PERSIST=1` (персистентный кэш LMCache) ВТОРОЙ параллельный запрос мог
-убить движок: после `LMCache ERROR ... processing the retrieve ...
-result=False` `EngineCore` падал на
-`scheduler.py: _update_from_kv_xfer_finished: assert req_id in self.requests`,
-все запросы отвечали 500 (`EngineDeadError`). Причина — известная гонка в
-адаптере LMCache для vLLM (апстрим-тикеты LMCache #4185 / vLLM #49089,
-исправление в LMCache PR #4136 ещё не влито). В рецепте лежит ВРЕМЕННАЯ защита
-(`patches/lmcache_mp_adapter_race.py`, ставится через `sitecustomize.py`) --
-см. раздел «Известная проблема апстрима» в вики kv-persistence. Поэтому
-измерения ниже для пути с LMCache остаются на уровне N <= 2; защита на железе
-НЕ проверялась -- считайте конкурентность с `KV_PERSIST=1` непроверенной выше
-N=2.
-
+`KV_PERSIST=1` гонка прерывания retrieve (LMCache #4185 / vLLM #49089) могла
+убивать движок при N>=2. ПРОБЛЕМА ИСПРАВЛЕНА в кастомной сборке LMCache (портированный
+апстрим PR #4136, см. kv-persistence `vendor/patches/lmcache/`); проверьте фикс
+на железе перед измерениями при N>=2.
 **Честный статус.** На целевом железе измерены только N <= 2 (а путь с LMCache
 имеет проблему гибели движка при N=2, см. выше). N = 3..10 НЕ измерены;
 захват CUDA-графов при `--max-num-seqs 10` не проверен (при первом старте смотрите в лог
@@ -371,6 +362,10 @@ N=2.
 `cached_tokens=2560`, L2-событий чтения = 1, машинный вердикт PASS) — доказательства
 в `docs/final-report.md` kv-persistence.
 
-**Предупреждение о несовместимости (r90b):** не комбинируйте `KVP_LOAD_FAILURE_POLICY=recompute` с временной защитой C2 (`patches/lmcache_mp_adapter_race.py`), пока эта пара явно не проверена. При `recompute` запрос не освобождается после неудачной загрузки, но защита C2 выбрасывает его `finished_sending` из `ret_stores` — такие KV-блоки никогда не возвращаются в пул и утекают (потолок памяти незаметно растёт, пока движок не падает). Выберите что-то одно: снимите C2 (он сделан под дефолтный `fail`) либо оставьте C2 и используйте только `fail`. Сочетание — после апстрим PR #4136 и явной проверки.
+**Источник фикса гонки (r90, ревизия):** гонка retrieve/abort при N>=2 с
+`KV_PERSIST=1` (обе формы: (1) retrieve->False с поздним finished_sending и
+(2) обрыв клиента посреди retrieve с поздним finished_recving) закрыта
+КАСТОМНОЙ сборкой LMCache, содержащей полный апстрим-фикс PR #4136
+(см. kv-persistence `vendor/patches/lmcache/SOURCES.md`). Старый локальный
+guard-плагин удалён. Lazy-offload не затронут.
 
-**Область действия защиты от гонок (r90c P1-2):** временный патч (`patches/lmcache_mp_adapter_race.py`) закрывает ОБЕ известные формы гонки при N>=2 с `KV_PERSIST=1`: (1) retrieve->False с поздним `finished_sending` и (2) обрыв клиента во время retrieve с поздним `finished_recving` (LMCache #4185). Режим lazy-offload (`lmcache.mp.lazy_offload`) не подвержен гонке -- `get_finished_with_lazy_offload` не возвращает `finished_sending`, обеих форм там нет; лаунчеры этот режим не включают. НЕ комбинируйте `KVP_LOAD_FAILURE_POLICY=recompute` с защитой (см. предупреждение выше), пока апстрим PR #4136 не войдёт и пара не будет проверена. Когда исправление выйдет в релиз LMCache: обновите зависимость и УДАЛИТЕ этот патч.
