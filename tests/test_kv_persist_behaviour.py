@@ -160,6 +160,11 @@ def _install_stubs(tmp_path: Path):
 
 def _run(lp: Path, env: dict, extra: dict | None = None):
     e = env.copy()
+    # r2 P0-1 (round 2): fixture launches are NOT about the custom-image check (which
+    # needs a real kv-persistence checkout + built image) -- opt out by default, exactly
+    # like KVP_PREFLIGHTS_DONE suppresses shared pre-flights. Test cases that DO assert
+    # the mandate pass KVP_SKIP_IMAGE_CHECK=0 explicitly and install their own stubs.
+    e.setdefault("KVP_SKIP_IMAGE_CHECK", "1")
     e.update(extra or {})
     return subprocess.run(
         ["bash", str(lp)], env=e, capture_output=True, text=True, timeout=120

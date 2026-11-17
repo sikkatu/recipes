@@ -82,6 +82,9 @@ def _run(lp: Path, env, log, extra: dict | None = None):
     if log.exists():
         log.unlink()
     e = env.copy(); e.update(extra or {})
+    # r2 P0-1: opt out of the custom-image check by default in fixture launches
+    # (same pattern as KVP_PREFLIGHTS_DONE for shared pre-flights).
+    e.setdefault("KVP_SKIP_IMAGE_CHECK", "1")
     return subprocess.run(["bash", str(lp)], env=e,
                           capture_output=True, text=True, timeout=90)
 

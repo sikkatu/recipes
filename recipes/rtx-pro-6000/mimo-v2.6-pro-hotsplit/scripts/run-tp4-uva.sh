@@ -133,7 +133,7 @@ fi
 # --- contract: image digests, always (no :latest, no floating tags) -------------------------------
 IMAGE="${IMAGE:-}"
 case "$IMAGE" in
-  *@sha256:*)
+  *'@sha256:'*)
     # the digest must be exactly 64 hex chars; a malformed one silently resolves to a
     # different image or fails later in a confusing way
     if ! printf '%s' "$IMAGE" | grep -Eq '@sha256:[0-9a-f]{64}$'; then
@@ -141,10 +141,17 @@ case "$IMAGE" in
 Expected @sha256:<exactly 64 hex chars>. Get the real digest with:
   docker buildx imagetools inspect <repo>:<tag> | grep Digest"
     fi ;;
-  *) die "IMAGE must be pinned by digest (@sha256:...), got: '${IMAGE:-<empty>}'.
-Floating tags are not reproducible. Get the digest first:
-  docker buildx imagetools inspect <repo>:<tag> | grep Digest
-then run: IMAGE=<repo>:<tag>@sha256:<digest> $0" ;;
+  sha256:*)
+    # bare image ID pin (locally built custom LMCache derive -- build-image.sh)
+    if ! printf '%s' "$IMAGE" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+      die "IMAGE id is malformed: '$IMAGE'
+Expected sha256:<exactly 64 hex chars>. Get it with:
+  docker inspect --format '{{.Id}}' '<local-image>'"
+    fi ;;
+  *) die "IMAGE must be pinned by digest (@sha256:...) or by image ID (sha256:...), got: '${IMAGE:-<empty>}'. Floating tags are not reproducible. Get the digest first:
+  docker buildx imagetools inspect <repo>:<tag> | grep Digest      # remote image
+  docker inspect --format '{{.Id}}' <local-image>                  # local custom image
+then run: IMAGE=<repo>:<tag>@sha256:<digest> (or IMAGE=sha256:<id>) $0" ;;
 esac
 
 # --- contract: model revisions are commit SHAs when the model is fetched --------------------------
@@ -358,6 +365,24 @@ if [ "$KV_PERSIST" = "1" ]; then
   case "$KV_PERSIST_HOST:$KV_PERSIST_PORT" in
     *[^0-9a-zA-Z.\[\]:-]*) die "KV_PERSIST_HOST/PORT contain unexpected characters" ;;
   esac
+  # R2 P0-1: REQUIRE the custom LMCache derivative when KV_PERSIST is on. After the local
+  # race-guard removal (r2), only the custom build carries PR #4136/#5972. stock vLLM images
+  # silently run upstream LMCache without the fixes and the engine dies on the first
+  # retrieve/abort race + incomplete KV objects get persisted. verify-image-custom.sh checks
+  # /etc/kvp-lmcache-identity.json (labels) in the image before the model load.
+  # Test-harness opt-out (round 2): KVP_SKIP_IMAGE_CHECK=1 suppresses the check the same way
+  # KVP_PREFLIGHTS_DONE suppresses shared pre-flights -- production runs must NOT set this.
+  KVP_REPO_FOR_CHECK="${KVP_REPO:-${KVP_REPO_ROOT:-$HOME/kv-persistence}}"
+  if [ "${KVP_SKIP_IMAGE_CHECK:-0}" != "1" ]; then
+    if [ -f "$KVP_REPO_FOR_CHECK/scripts/verify-image-custom.sh" ]; then
+      bash "$KVP_REPO_FOR_CHECK/scripts/verify-image-custom.sh" "$IMAGE" "$KVP_REPO_FOR_CHECK" \
+        || die "IMAGE '$IMAGE' is NOT the custom LMCache build (see errors above). Build it with:
+  build-lmcache.sh + build-image.sh inside your kv-persistence checkout ($KVP_REPO_FOR_CHECK)."
+    else
+      die "KV_PERSIST=1 requires kv-persistence's verify-image-custom.sh (not found at $KVP_REPO_FOR_CHECK).
+R2 P0-1: without it the ONLY retrieve/abort fix would silently be absent. Set KVP_REPO to your kv-persistence checkout."
+    fi
+  fi
   # Review fix (round 23): resolve the EFFECTIVE engine config through the
   # SAME shared code the namespace derivation uses (kvpersist.cli
   # effective-identity when a kv-persistence checkout is present, identical

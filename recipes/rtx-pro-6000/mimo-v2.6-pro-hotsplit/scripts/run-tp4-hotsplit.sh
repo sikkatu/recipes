@@ -139,9 +139,13 @@ fi
 
 # --- contract: image digests, always (no :latest, no floating tags) -------------------------------
 # The model patches below are built against a specific vLLM image, so the image MUST be pinned.
+# R2 P0-1 (review): two accepted pin forms -- remote digest (:<repo>:<tag>@sha256:<64hex>') AND
+# a bare local image ID ('sha256:<64hex>'), because a locally built custom LMCache
+# derive (scripts/build-image.sh in kv-persistence) has NO RepoDigest. Get the ID with:
+#   docker inspect --format '{{.Id}}' kvp-lmcache:latest
 IMAGE="${IMAGE:-}"
 case "$IMAGE" in
-  *@sha256:*)
+  *'@sha256:'*)
     # the digest must be exactly 64 hex chars; a malformed one silently resolves to a
     # different image or fails later in a confusing way
     if ! printf '%s' "$IMAGE" | grep -Eq '@sha256:[0-9a-f]{64}$'; then
@@ -149,10 +153,18 @@ case "$IMAGE" in
 Expected @sha256:<exactly 64 hex chars>. Get the real digest with:
   docker buildx imagetools inspect <repo>:<tag> | grep Digest"
     fi ;;
-  *) die "IMAGE must be pinned by digest (@sha256:...), got: '${IMAGE:-<empty>}'. Floating tags are not
+  sha256:[0-9a-f]*)
+    # bare image ID pin (locally built custom image)
+    if ! printf '%s' "$IMAGE" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+      die "IMAGE id is malformed: '$IMAGE'
+Expected sha256:<exactly 64 hex chars>. Get it with:
+  docker inspect --format '{{.Id}}' '<local-image>'"
+    fi ;;
+  *) die "IMAGE must be pinned by digest (@sha256:...) or by image ID (sha256:...), got: '${IMAGE:-<empty>}'. Floating tags are not
 reproducible and the mounted model patches only match one vLLM build. Get the digest first:
-  docker buildx imagetools inspect <repo>:<tag> | grep Digest
-then run: IMAGE=<repo>:<tag>@sha256:<digest> $0" ;;
+  docker buildx imagetools inspect <repo>:<tag> | grep Digest      # remote image
+  docker inspect --format '{{.Id}}' <local-image>                  # local custom image
+then run: IMAGE=<repo>:<tag>@sha256:<digest>  (or IMAGE=sha256:<id>)  $0" ;;
 esac
 # Round 80 review (diagnostics parity): a DIRECT run-tp4-hotsplit.sh (the
 # README documents it as the alternative to start-all.sh) must run the SAME
@@ -182,8 +194,29 @@ fi
 # lands in live/image (test-recovery.sh scenario B reads it). LIVE_DIR comes
 # from start-all.sh (exported) or the recipe's own default.
 if [ -n "$IMAGE" ]; then
-  printf '%s
-' "$IMAGE" > "$LIVE_DIR/image" 2>/dev/null || true
+printf '%s\n' "$IMAGE" > "$LIVE_DIR/image" 2>/dev/null || true
+fi
+# R2 P0-1: REQUIRE the custom LMCache derivative when KV_PERSIST is on: after the local race-guard
+# was removed (r2, replaced by upstream-derived fix in the custom build), running a stock vLLM
+# image silently runs upstream LMCache WITHOUT the #4136 retrieve/abort fix -- the engine dies
+# on the first retrieve/abort race. `verify-image-custom.sh` verifies /etc/kvp-lmcache-identity.json
+# (base + patch SHA-256 labels) matches this repo's patches; a mismatch aborts the launch.
+# Test-harness opt-out (round 2): KVP_SKIP_IMAGE_CHECK=1 suppresses the check the same way
+# KVP_PREFLIGHTS_DONE suppresses shared pre-flights -- production runs must NOT set this.
+KVP_REPO_FOR_CHECK="${KVP_REPO:-${KVP_REPO_ROOT:-$HOME/kv-persistence}}"
+if [ "${KV_PERSIST:-0}" = "1" ] && [ "${KVP_SKIP_IMAGE_CHECK:-0}" != "1" ]; then
+  if [ -f "$KVP_REPO_FOR_CHECK/scripts/verify-image-custom.sh" ]; then
+    bash "$KVP_REPO_FOR_CHECK/scripts/verify-image-custom.sh" "$IMAGE" "$KVP_REPO_FOR_CHECK" \
+      || die "IMAGE '$IMAGE' is NOT the custom LMCache build (see errors above). Build it with:
+  KVP_REPO \"$KVP_REPO_FOR_CHECK\" -- scripts/build-lmcache.sh + scripts/build-image.sh"
+  else
+    die "KV_PERSIST=1 requires kv-persistence's verify-image-custom.sh (not found at $KVP_REPO_FOR_CHECK).
+R2 P0-1: without it, the ONLY retrieve/abort fix would silently be absent. Set KVP_REPO to your kv-persistence checkout."
+  fi
+elif [ -f "$KVP_REPO_FOR_CHECK/scripts/verify-image-custom.sh" ]; then
+  # KV_PERSIST=0: cache is disabled, upstream LMCache is irrelevant -- but still warn loudly so a
+  # mistaken KV_PERSIST=1 launch later cannot surprise the operator.
+  echo "NOTE (P0-1): KV_PERSIST=0, LMCache custom-build check skipped (no cache uses it)." >&2
 fi
 
 # --- contract: model revisions are commit SHAs when the model is fetched --------------------------
