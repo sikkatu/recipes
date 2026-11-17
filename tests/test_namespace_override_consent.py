@@ -110,6 +110,8 @@ def stub_env(tmp_path):
     env["KVP_SKIP_HOTSPLIT_CHECK"] = "1"
     env["KVP_SKIP_IPC_TEST"] = "1"
     env["KVP_SKIP_GPU_CHECK"] = "1"
+    env["KVP_SKIP_IMAGE_CHECK"] = "1"
+    env["KVP_SKIP_LMC_IDENTITY"] = "1"
     env["RECIPE_DIR"] = str(RECIPE)
     env["KVP_REPO"] = str(KV_REPO)
     # a "running" cache server + a listening socket for the pre-flight

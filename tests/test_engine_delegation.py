@@ -135,6 +135,8 @@ def stub_env(tmp_path):
     env["KV_PERSIST_HOST"] = "127.0.0.1"
     env["KV_PERSIST_PORT"] = str(_port)
     env["WAIT_TRIES"] = "1"
+    env["KVP_SKIP_IMAGE_CHECK"] = "1"
+    env["KVP_SKIP_LMC_IDENTITY"] = "1"
     env["WAIT_SLEEP"] = "0"
     env["KVP_SKIP_HOTSPLIT_CHECK"] = "1"
     # Round 77: the delegated branch now runs the shared pre-flights (mp_ping +
