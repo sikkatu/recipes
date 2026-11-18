@@ -132,6 +132,23 @@ fi
 
 # --- contract: image digests, always (no :latest, no floating tags) -------------------------------
 IMAGE="${IMAGE:-}"
+# r6-7 B-2: no manual IMAGE needed -- the custom image id recorded by
+# kv-persistence's build-image.sh (live/image) is the default runtime image
+# when KV_PERSIST=1. An explicitly set IMAGE always wins; the --deep custom
+# image verification below is unchanged by this fallback.
+if [ -z "$IMAGE" ] && [ "${KV_PERSIST:-0}" = "1" ]; then
+  _kvp_repo="${KVP_REPO:-${KVP_REPO_ROOT:-$HOME/kv-persistence}}"
+  _kvp_live="${KVP_LIVE_DIR:-$_kvp_repo/live}"
+  if [ -s "$_kvp_live/image" ]; then
+    IMAGE="$(tr -d '[:space:]' < "$_kvp_live/image")"
+    echo "IMAGE not set -- using the custom image recorded in $_kvp_live/image: $IMAGE"
+  else
+    die "KV_PERSIST=1 but IMAGE is empty and $_kvp_live/image does not exist -- first run in $_kvp_repo:
+  bash scripts/build-lmcache.sh
+  bash scripts/build-image.sh
+(or export IMAGE=<custom image id>)"
+  fi
+fi
 case "$IMAGE" in
   *'@sha256:'*)
     # the digest must be exactly 64 hex chars; a malformed one silently resolves to a
