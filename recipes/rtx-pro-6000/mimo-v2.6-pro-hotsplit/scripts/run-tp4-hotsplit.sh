@@ -224,12 +224,13 @@ if [ "${KV_PERSIST:-0}" = "1" ] && [ "${KVP_PREFLIGHTS_DONE:-0}" != "1" ]; then
 fi
 # Round 80 review: remember the VALIDATED image in live/image -- the
 # zero-config auto-resolve (print-recipe-image.sh) lived ONLY in the deleted
-# kv launcher. Written AFTER the digest check so an invalid IMAGE never
-# lands in live/image (test-recovery.sh scenario B reads it). LIVE_DIR comes
-# from start-all.sh (exported) or the recipe's own default.
-if [ -n "$IMAGE" ]; then
-printf '%s\n' "$IMAGE" > "$LIVE_DIR/image" 2>/dev/null || true
-fi
+# kv launcher. LIVE_DIR comes from start-all.sh (exported) or the recipe's
+# own default. (test-recovery.sh scenario B reads it).
+# r20 K2: the write is MOVED AFTER the verify-image-custom.sh block below and
+# runs ONLY when KV_PERSIST=1 and the custom-image check is not skipped -- a
+# stock IMAGE passed here must NEVER land in live/image (it used to overwrite
+# the custom id BEFORE the check, and the check then refused -- leaving the
+# stock id behind: the custom image was "forgotten" until a full rebuild).
 # R2 P0-1: REQUIRE the custom LMCache derivative when KV_PERSIST is on: after the local race-guard
 # was removed (r2, replaced by upstream-derived fix in the custom build), running a stock vLLM
 # image silently runs upstream LMCache WITHOUT the #4136 retrieve/abort fix -- the engine dies
@@ -251,6 +252,15 @@ elif [ -f "$KVP_REPO_FOR_CHECK/scripts/verify-image-custom.sh" ]; then
   # KV_PERSIST=0: cache is disabled, upstream LMCache is irrelevant -- but still warn loudly so a
   # mistaken KV_PERSIST=1 launch later cannot surprise the operator.
   echo "NOTE (P0-1): KV_PERSIST=0, LMCache custom-build check skipped (no cache uses it)." >&2
+fi
+# r20 K2: record the VALIDATED image in live/image AFTER the verify block and
+# ONLY when KV_PERSIST=1 with the check NOT skipped -- the two places that may
+# write live/image are build-image.sh (after its verify-gate) and this one
+# (after the successful deep check). KV_PERSIST=0 (stock runs) and
+# KVP_SKIP_IMAGE_CHECK=1 (test harness) never touch the file: there is no
+# confirmation to record.
+if [ "${KV_PERSIST:-0}" = "1" ] && [ "${KVP_SKIP_IMAGE_CHECK:-0}" != "1" ] && [ -n "$IMAGE" ]; then
+  printf '%s\n' "$IMAGE" > "$LIVE_DIR/image" 2>/dev/null || true
 fi
 
 # --- contract: model revisions are commit SHAs when the model is fetched --------------------------

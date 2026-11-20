@@ -415,6 +415,14 @@ if [ "$KV_PERSIST" = "1" ]; then
 R2 P0-1: without it the ONLY retrieve/abort fix would silently be absent. Set KVP_REPO to your kv-persistence checkout."
     fi
   fi
+  # r20 K2: record the VALIDATED image in live/image AFTER the verify block
+  # and ONLY when KV_PERSIST=1 with the check NOT skipped (same rule as
+  # run-tp4-hotsplit.sh -- the two places that may write live/image are
+  # build-image.sh and this one, both AFTER their verify gates). KV_PERSIST=0
+  # (stock runs) and KVP_SKIP_IMAGE_CHECK=1 never touch the file.
+  if [ "${KV_PERSIST:-0}" = "1" ] && [ "${KVP_SKIP_IMAGE_CHECK:-0}" != "1" ] && [ -n "$IMAGE" ]; then
+    printf '%s\n' "$IMAGE" > "$LIVE_DIR/image" 2>/dev/null || true
+  fi
   # Review fix (round 23): resolve the EFFECTIVE engine config through the
   # SAME shared code the namespace derivation uses (kvpersist.cli
   # effective-identity when a kv-persistence checkout is present, identical
