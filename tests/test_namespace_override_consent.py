@@ -96,6 +96,12 @@ def stub_env(tmp_path):
     key_file.chmod(0o600)
     live = tmp_path / "live"
     live.mkdir()
+    # r20 K7: the build records the LMCache build identity in
+    # live/image-identity.env (KVP_LMC_VERSION = md.version('lmcache')) --
+    # the namespace hashes lmcache_build from exactly this file on a real
+    # machine, so the fixture must carry it too.
+    (live / "image-identity.env").write_text(
+        "KVP_LMC_VERSION=0.5.8rc1.post48+kvp.testhash00\n")
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["STUB_LOG"] = str(log)
