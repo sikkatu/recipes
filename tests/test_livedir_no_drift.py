@@ -36,11 +36,30 @@ case "$(basename "$0")" in
     case "$1" in
       info) exit 0 ;;
       container) exit 1 ;;
+      image)
+        # r20 K1: check_image_identity asks `docker image inspect --format
+        # {{json .Config.Labels}}` -- answer the labels of a real
+        # build-image.sh run (base pin + the repo's real patch SHAs)
+        if [ -n "${STUB_IMAGE_LABELS:-}" ]; then
+          printf '%s\\n' "$STUB_IMAGE_LABELS"
+        else
+          echo '{}'
+        fi
+        exit 0 ;;
       inspect) echo "running exit=0 oom=false"; exit 0 ;;
       logs) printf '%s' "${STUB_DOCKER_LOGS:-}" ;;
       ps) exit 0 ;;
       run)
         case "$*" in
+          *kvp-lmcache-identity.json*)
+            if [ -n "${STUB_IDENT_JSON:-}" ]; then
+              printf '%s\\n' "$STUB_IDENT_JSON"
+            else
+              echo '{}'
+            fi
+            exit 0 ;;
+          *find_spec*|*cuda_ops*) exit 0 ;;
+          *lmcache*) echo "0.5.8rc1.post48+kvp.60dce759ea93"; exit 0 ;;
           *--rm*) echo "/usr/local/lib/python3.12/dist-packages"; exit 0 ;;
         esac
         echo "STUB_DOCKER_RUN" >> "$STUB_LOG"
@@ -123,6 +142,37 @@ def stub_env(tmp_path):
     env["KV_PERSIST_PORT"] = str(srv.getsockname()[1])
     # scrub any inherited LIVE_DIR so the drift test is honest
     env.pop("LIVE_DIR", None)
+    # r20 K1: the fail-fast image resolver reads live/image and verifies the
+    # image labels against the repo's REAL patch SHAs -- feed the stub the
+    # labels/identity of a real build-image.sh run. The resolver's live/image
+    # lives in a sandbox dir (KVP_LIVE_DIR); the STATE contract under test is
+    # LIVE_DIR (= the repo's live/), which start-all.sh pins itself.
+    import hashlib
+    import json as _json
+    pd = KV_REPO / "vendor" / "patches" / "lmcache"
+
+    def _sha(p):
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    base_spec = "x@sha256:" + "a" * 64   # what the test passes as IMAGE
+    env["STUB_IMAGE_LABELS"] = _json.dumps({
+        "org.kvp.lmc-base": base_spec,
+        "org.kvp.lmc-patch-4136": _sha(pd / "4136-mp-retrieve-abort.patch"),
+        "org.kvp.lmc-patch-5972": _sha(pd / "5972-incomplete-kv-objects.patch"),
+    })
+    env["STUB_IDENT_JSON"] = _json.dumps({
+        "module": "kvp-custom-lmcache-identity",
+        "lmcache_source_commit": "07f1c6bb642f4772606a36eab730ae009ddce08f",
+        "pr4136_patch_sha256": _sha(pd / "4136-mp-retrieve-abort.patch"),
+        "pr5972_patch_sha256": _sha(pd / "5972-incomplete-kv-objects.patch"),
+        "wheel": "lmcache-0.5.8rc1.post48+kvp.60dce759ea93-cp312-cp312-linux_x86_64.whl",
+        "wheel_sha256": "a" * 64,
+        "wheel_version": "0.5.8rc1.post48+kvp.60dce759ea93",
+    })
+    resolver_live = tmp_path / "resolver-live"
+    resolver_live.mkdir()
+    custom_id = "sha256:" + "c12a95bf" + "0" * 56
+    (resolver_live / "image").write_text(custom_id + "\n")
+    env["KVP_LIVE_DIR"] = str(resolver_live)
     return env, log, foreign
 
 

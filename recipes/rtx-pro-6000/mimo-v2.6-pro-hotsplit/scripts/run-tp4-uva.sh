@@ -136,17 +136,32 @@ IMAGE="${IMAGE:-}"
 # kv-persistence's build-image.sh (live/image) is the default runtime image
 # when KV_PERSIST=1. An explicitly set IMAGE always wins; the --deep custom
 # image verification below is unchanged by this fallback.
-if [ -z "$IMAGE" ] && [ "${KV_PERSIST:-0}" = "1" ]; then
+# r20 K1: ONE fail-fast resolution of the runtime image BEFORE the pin-format
+# case below. A stock IMAGE= with KV_PERSIST=1 is the BASE pin: it must match
+# the base of the custom image in live/image, and the launch runs the CUSTOM
+# one. KV_PERSIST!=1 (stock runs) -- IMAGE is NOT touched at all.
+if [ "${KV_PERSIST:-0}" = "1" ]; then
   _kvp_repo="${KVP_REPO:-${KVP_REPO_ROOT:-$HOME/kv-persistence}}"
-  _kvp_live="${KVP_LIVE_DIR:-$_kvp_repo/live}"
-  if [ -s "$_kvp_live/image" ]; then
-    IMAGE="$(tr -d '[:space:]' < "$_kvp_live/image")"
-    echo "IMAGE not set -- using the custom image recorded in $_kvp_live/image: $IMAGE"
+  if [ -f "$_kvp_repo/scripts/env.sh" ]; then
+    # shellcheck disable=SC1091
+    . "$_kvp_repo/scripts/env.sh"
+    _kvp_resolve_runtime_image "$_kvp_repo" \
+      || die "runtime image resolution failed (see above).
+Fix: comment out IMAGE= in tp4.env (or unset IMAGE in the environment), or run
+  IMAGE=\"\$(cat ${KVP_LIVE_DIR:-$_kvp_repo/live}/image)\" $0"
   else
-    die "KV_PERSIST=1 but IMAGE is empty and $_kvp_live/image does not exist -- first run in $_kvp_repo:
+    # legacy fallback (no kv-persistence checkout): keep the old live/image
+    # resolve so a missing checkout degrades the same way as before r20 K1
+    _kvp_live="${KVP_LIVE_DIR:-$_kvp_repo/live}"
+    if [ -z "$IMAGE" ] && [ -s "$_kvp_live/image" ]; then
+      IMAGE="$(tr -d '[:space:]' < "$_kvp_live/image")"
+      echo "IMAGE not set -- using the custom image recorded in $_kvp_live/image: $IMAGE"
+    elif [ -z "$IMAGE" ]; then
+      die "KV_PERSIST=1 but IMAGE is empty and $_kvp_live/image does not exist -- first run in $_kvp_repo:
   bash scripts/build-lmcache.sh
   bash scripts/build-image.sh
 (or export IMAGE=<custom image id>)"
+    fi
   fi
 fi
 case "$IMAGE" in
