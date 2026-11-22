@@ -37,10 +37,13 @@ exit 0
 # 40-frame traceback in the LMCache server log: the frames, the exception
 # line (the one the old code lost) and the CUDA driver block.
 def _traceback_log(ipc: bool) -> str:
+    # r29 N4: 40 frames (88-line block, OVER the 80-line bound) -- the
+    # start+end limiter must keep `Returning 205` and the driver block
+    # (a plain head -n 80 would cut exactly them). frame_39 = the last frame.
     frames = "".join(
         f"  File \"/opt/venv/lib/python3.12/site-packages/lmcache/x.py\", "
         f"line {100 + i}, in frame_{i}\n    do_step_{i}()\n"
-        for i in range(30))
+        for i in range(40))
     if ipc:
         exc = ("torch.AcceleratorError: CUDA error: mapping of buffer object failed\n"
                "Failed to open/create interprocess memory file\n"
@@ -99,10 +102,11 @@ def _run_failfast(tmp_path, ipc_error=True):
 
 
 def test_t6a_full_traceback_reaches_the_output(tmp_path):
-    """> T6: a 30-frame traceback -> the LAST line of the exception
-    (Returning 205 ... cuIpcOpenEventHandle) AND the "The CUDA driver logged
-    these messages" block are in the output. MUTATION caught: restoring
-    `grep -A20 | head -25` (or the unbounded `,$p`)."""
+    """> T6 / r29 N4: a 40-frame traceback (88 lines, OVER the bound) -> the
+    LAST line of the exception (Returning 205 ... cuIpcOpenEventHandle) AND
+    the "The CUDA driver logged these messages" block survive, and the
+    `lines skipped` marker shows the cut. MUTATION caught: restoring
+    `grep -A20 | head -25` or the plain `head -n 80` (both cut the tail)."""
     r, _ = _run_failfast(tmp_path, ipc_error=True)
     out = r.stdout + r.stderr
     assert r.returncode != 0, f"the fail-fast block must exit 1:\n{out[-800:]}"
@@ -110,8 +114,10 @@ def test_t6a_full_traceback_reaches_the_output(tmp_path):
         f"the LAST line of the exception must reach the output:\n{out[-1500:]}")
     assert "The CUDA driver logged these messages" in out, (
         f"the CUDA driver block must reach the output:\n{out[-1500:]}")
-    # the LAST frame of the fixture traceback is printed, not truncated
-    assert "frame_29" in out, f"all frames must be printed:\n{out[-1500:]}"
+    # the first line of the traceback and the start+end marker
+    assert "Error handling operation register_kv_cache" in out
+    assert "lines skipped" in out, (
+        f"the limiter marker must show the cut:\n{out[-1500:]}")
 
 
 def test_t6b_ipc_advice_only_for_ipc_errors(tmp_path):
