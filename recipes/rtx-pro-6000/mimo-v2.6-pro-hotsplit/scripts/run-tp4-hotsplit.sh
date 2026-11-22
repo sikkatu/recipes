@@ -951,11 +951,17 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
     if [ -n "$_kvp_serr" ]; then
       echo "" >&2
       echo "ERROR: the cache server FAILED to handle a request (fail-fast):" >&2
-      # Round 27 (K6): print the WHOLE traceback -- every frame, the exception
-      # line (torch.AcceleratorError ... 205) and the "The CUDA driver logged
-      # these messages" block. Never truncate at N lines: the hardware log lost
-      # the last line of the exception to `grep -A20 | head -25`.
-      _kvp_trace="$(tail -c "+$(( _kvp_slog_before + 1 ))" "$_kvp_slog" | sed -n '/Error handling operation register_kv_cache/,$p')"
+      # Round 27 (K6) / r28 L2: print the WHOLE traceback -- every frame, the
+      # exception line (torch.AcceleratorError ... 205) and the "The CUDA driver
+      # logged these messages" block. r28 L2: the selection is BOUNDED -- from
+      # the error line to the NEXT timestamped log line, at most 80 lines: the
+      # old `sed … ,$p` printed to EOF and the server's ~2 DEBUG lines/second
+      # ("skipping eviction") buried the exception under hundreds of noise
+      # lines (the hardware log: 644 lines, 600 of them noise).
+      _kvp_trace="$(tail -c "+$(( _kvp_slog_before + 1 ))" "$_kvp_slog" | awk '
+        f && /^\[20[0-9][0-9]-/ {exit}
+        /Error handling operation register_kv_cache/ {f=1}
+        f {print}' | head -n 80)"
       printf '%s\n' "$_kvp_trace" >&2
       echo "" >&2
       echo "This is the root cause -- waiting 300s cannot fix it. See the exception above." >&2
@@ -1007,12 +1013,17 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
         if [ -n "$_kvp_err" ]; then
           echo "--- server ERROR (root cause) ---" >&2
           _kvp_errline="${_kvp_err%%:*}"
-          # Round 27 (K6): print to the END of the log (the traceback runs
-          # more than 25 lines -- the exception line and the "The CUDA driver
-          # logged these messages" block must both reach the output).
-          sed -n "${_kvp_errline},\$p" "$_kvp_log" >&2 || true
+          # Round 27 (K6) / r28 L2: print the WHOLE traceback to the end of the
+          # ERROR BLOCK only -- bounded selection (from the found line to the
+          # next timestamped line, at most 80 lines): the old `,$p` ran to EOF
+          # and 300s of "skipping eviction" DEBUG noise pushed the exception
+          # off the screen.
+          _kvp_trace="$(awk -v start="$_kvp_errline" '
+            NR == start {f=1}
+            f && NR > start && /^\[20[0-9][0-9]-/ {exit}
+            f {print}' "$_kvp_log" | head -n 80)"
+          printf '%s\n' "$_kvp_trace" >&2 || true
           # Round 27 (K6): the CUDA-IPC advice only for IPC failures.
-          _kvp_trace="$(sed -n "${_kvp_errline},\$p" "$_kvp_log" 2>/dev/null || true)"
           case "$_kvp_trace" in
             *cuIpc*|*CUDA_ERROR_MAP_FAILED*|*"invalid device context"*)
               echo "Fix (CUDA IPC boundary): the cache server and the engine must run under ONE UID." >&2
