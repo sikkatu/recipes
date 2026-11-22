@@ -46,7 +46,13 @@ case "$(basename "$0")" in
           echo '{}'
         fi
         exit 0 ;;
-      inspect) echo "running exit=0 oom=false"; exit 0 ;;
+      inspect)
+        # r24 F2 (kv-persistence): the readiness/pre-flight gate asks for
+        # {{.State.Running}} -- answer true (the stub simulates a live cache).
+        case "$*" in
+          *State.Running*) echo true; exit 0 ;;
+        esac
+        echo "running exit=0 oom=false"; exit 0 ;;
       logs) printf '%s' "${STUB_DOCKER_LOGS:-}" ;;
       ps) exit 0 ;;
       run)
