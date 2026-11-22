@@ -951,12 +951,28 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
     if [ -n "$_kvp_serr" ]; then
       echo "" >&2
       echo "ERROR: the cache server FAILED to handle a request (fail-fast):" >&2
-      tail -c "+$(( _kvp_slog_before + 1 ))" "$_kvp_slog" | grep -a -A20 'Error handling operation register_kv_cache' | head -25 >&2
+      # Round 27 (K6): print the WHOLE traceback -- every frame, the exception
+      # line (torch.AcceleratorError ... 205) and the "The CUDA driver logged
+      # these messages" block. Never truncate at N lines: the hardware log lost
+      # the last line of the exception to `grep -A20 | head -25`.
+      _kvp_trace="$(tail -c "+$(( _kvp_slog_before + 1 ))" "$_kvp_slog" | sed -n '/Error handling operation register_kv_cache/,$p')"
+      printf '%s\n' "$_kvp_trace" >&2
       echo "" >&2
       echo "This is the root cause -- waiting 300s cannot fix it. See the exception above." >&2
-      echo "Fix (CUDA IPC boundary): run the cache server as the SAME user as the engine" >&2
-      echo "  (KVP_SAME_UID=1 is now the default; KVP_SAME_UID=0 for root fallback)," >&2
-      echo "  or test the boundary first: bash scripts/ipc-test.sh" >&2
+      # Round 27 (K6): the CUDA-IPC advice belongs ONLY to IPC failures --
+      # a non-IPC error must not be told about UIDs.
+      case "$_kvp_trace" in
+        *cuIpc*|*CUDA_ERROR_MAP_FAILED*|*"invalid device context"*)
+          echo "Fix (CUDA IPC boundary): the cache server and the engine must run under ONE UID" >&2
+          echo "  (round 27 review). Check: docker inspect -f '{{.Config.User}}' lmcache-kvp-server" >&2
+          echo "  It must equal the engine UID. Restart the server correctly:" >&2
+          echo "    bash scripts/stop-cache.sh && bash scripts/start-cache.sh" >&2 ;;
+      esac
+      # Round 27 (K6): the engine container must not stay alive on exit 1 --
+      # it holds the GPUs and the next pre-flight ("GPU memory is free") blocks.
+      # Logs are kept (docker logs survives docker stop), crash evidence is
+      # preserved.
+      docker stop "$CONTAINER" >/dev/null 2>&1 || true
       exit 1
     fi
   fi
@@ -991,7 +1007,19 @@ for _ in $(seq 1 "$WAIT_TRIES"); do
         if [ -n "$_kvp_err" ]; then
           echo "--- server ERROR (root cause) ---" >&2
           _kvp_errline="${_kvp_err%%:*}"
-          sed -n "${_kvp_errline},$(( _kvp_errline + 25 ))p" "$_kvp_log" >&2 || true
+          # Round 27 (K6): print to the END of the log (the traceback runs
+          # more than 25 lines -- the exception line and the "The CUDA driver
+          # logged these messages" block must both reach the output).
+          sed -n "${_kvp_errline},\$p" "$_kvp_log" >&2 || true
+          # Round 27 (K6): the CUDA-IPC advice only for IPC failures.
+          _kvp_trace="$(sed -n "${_kvp_errline},\$p" "$_kvp_log" 2>/dev/null || true)"
+          case "$_kvp_trace" in
+            *cuIpc*|*CUDA_ERROR_MAP_FAILED*|*"invalid device context"*)
+              echo "Fix (CUDA IPC boundary): the cache server and the engine must run under ONE UID." >&2
+              echo "  Check: docker inspect -f '{{.Config.User}}' lmcache-kvp-server" >&2
+              echo "  It must equal the engine UID. Restart the server correctly:" >&2
+              echo "    bash scripts/stop-cache.sh && bash scripts/start-cache.sh" >&2 ;;
+          esac
         else
           echo "--- no 'Error handling operation' in the server log ---" >&2
         fi
