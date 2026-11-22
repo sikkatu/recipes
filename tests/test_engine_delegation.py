@@ -20,22 +20,18 @@ Every checklist item, verified without hardware (stub docker/curl):
    cannot move the warmed cache's namespace.
 """
 from __future__ import annotations
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
+import _contract as _T
 import os
 import stat
 import subprocess
 from pathlib import Path
-
 import pytest
 
 RECIPES = Path(__file__).resolve().parent.parent
-KV_REPO = next(
-    (c for c in (
-        RECIPES / "kv-persistence",
-        Path.home() / "kv-persistence",
-        RECIPES.parent / "kv-persistence",
-    ) if c.is_dir()),
-    None,
-)
+# r25 G9: the kv repo is a TEMP COPY from _contract.kv_repo() -- never the
+# operator's real checkout (start-all.sh writes $ROOT/live state records).
+KV_REPO = _T.kv_repo()
 RECIPE = RECIPES / "recipes" / "rtx-pro-6000" / "mimo-v2.6-pro-hotsplit"
 SKIP = "kv-persistence checkout not found (delegation tests need it)"
 

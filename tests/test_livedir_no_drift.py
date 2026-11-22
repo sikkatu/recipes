@@ -193,6 +193,10 @@ def test_state_files_land_in_the_repo_live_dir(stub_env):
         ["bash", str(start_all)],
         env={**env, "RECIPE_DIR": str(RECIPE), "KVP_ENGINE": "recipe",
              "IMAGE": "x@sha256:" + "a" * 64, "ALLOW_RUN": "1",
+             # r25 G9: the kv repo is a TEMP COPY -- point the launcher's
+             # KVP_REPO at it so verify-image-custom.sh runs from the copy
+             # and live/image is recorded in the COPY's live/.
+             "KVP_REPO": str(KV_REPO),
              "KVP_PERSIST_ENABLED": "false"},
         capture_output=True, text=True, timeout=180,
         cwd=str(foreign))
