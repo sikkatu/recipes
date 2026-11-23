@@ -114,8 +114,10 @@ def test_t6a_full_traceback_reaches_the_output(tmp_path):
         f"the LAST line of the exception must reach the output:\n{out[-1500:]}")
     assert "The CUDA driver logged these messages" in out, (
         f"the CUDA driver block must reach the output:\n{out[-1500:]}")
-    # the first line of the traceback and the start+end marker
+    # the first line of the traceback, the LAST frame and the start+end marker
     assert "Error handling operation register_kv_cache" in out
+    assert "frame_39" in out, (
+        f"the LAST frame must reach the output:\n{out[-1500:]}")
     assert "lines skipped" in out, (
         f"the limiter marker must show the cut:\n{out[-1500:]}")
 
